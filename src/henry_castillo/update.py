@@ -25,7 +25,7 @@ def current_version() -> str:
     try:
         return version(PACKAGE)
     except PackageNotFoundError:  # pragma: no cover - only when not installed
-        from henry_castillo import __version__  # noqa: PLC0415
+        from henry_castillo import __version__
 
         return __version__
 
