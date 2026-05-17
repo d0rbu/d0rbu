@@ -13,6 +13,7 @@ request fails loudly rather than flaking.
 
 import importlib.util
 import json
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -196,11 +197,25 @@ def test_iso_to_dt_z_equals_explicit_offset():
 
 
 # ---------------------------------------------------------------------------
-# find_violations — uv side
+# find_violations — baseline / delta semantics
+#
+# A dependency only violates the policy if its pinned (name, version) is NOT
+# present in the baseline lockfile (i.e. it was *added* or *version-changed*
+# vs the baseline) AND it is younger than min_age. Dependencies unchanged
+# from the baseline are grandfathered (the established lock is trusted; the
+# threat is a *new/upgraded* fresh version entering). A baseline of ``None``
+# means the lock did not exist at the base ref -> this run is
+# *baseline-establishing*: every young dep is grandfathered (0 violations)
+# but still surfaced for visibility. This mirrors Dependabot ``cooldown``.
 # ---------------------------------------------------------------------------
 
 NOW = _dt(2026, 5, 17, 12, 0, 0)
 MIN_AGE = timedelta(days=7)
+
+# Empty baseline sets: nothing was previously locked, but the lock *did*
+# exist at the base ref (vs ``None`` which means it did not). Every pin is
+# therefore "added" and a candidate for the age check.
+EMPTY_BASE: set = set()
 
 
 def _no_npm(name, version):  # pragma: no cover - injected, never called here
@@ -210,20 +225,24 @@ def _no_npm(name, version):  # pragma: no cover - injected, never called here
 @pytest.mark.parametrize(
     ("uploaded", "expect_violation"),
     [
-        (NOW - timedelta(days=2), True),  # 2 days old -> too fresh
+        (NOW - timedelta(days=2), True),  # 2 days old, newly added -> too fresh
         (NOW - timedelta(days=30), False),  # 30 days old -> fine
     ],
 )
-def test_find_violations_uv_age(uploaded, expect_violation):
+def test_find_violations_uv_age_for_added_dep(uploaded, expect_violation):
+    """An added dep (not in baseline) younger than min_age is a violation."""
     uv_pkgs = [("freshpkg", "1.0.0", uploaded)]
-    violations, warnings = guard.find_violations(
+    violations, warnings, grandfathered = guard.find_violations(
         uv_pkgs,
         [],
         now=NOW,
         min_age=MIN_AGE,
         npm_published_at=_no_npm,
+        uv_baseline=EMPTY_BASE,
+        npm_baseline=EMPTY_BASE,
     )
     assert warnings == []
+    assert grandfathered == []
     assert (len(violations) == 1) is expect_violation
     if expect_violation:
         v = violations[0]
@@ -232,17 +251,88 @@ def test_find_violations_uv_age(uploaded, expect_violation):
         assert v.version == "1.0.0"
 
 
+def test_find_violations_uv_unchanged_from_baseline_is_grandfathered():
+    """A young dep with the SAME (name, version) as baseline is NOT a
+    violation -- it is grandfathered (and surfaced for visibility)."""
+    uv_pkgs = [("vetted", "1.0.0", NOW - timedelta(days=1))]
+    violations, warnings, grandfathered = guard.find_violations(
+        uv_pkgs,
+        [],
+        now=NOW,
+        min_age=MIN_AGE,
+        npm_published_at=_no_npm,
+        uv_baseline={("vetted", "1.0.0")},
+        npm_baseline=EMPTY_BASE,
+    )
+    assert violations == []
+    assert warnings == []
+    assert len(grandfathered) == 1
+    assert grandfathered[0].name == "vetted"
+    assert grandfathered[0].version == "1.0.0"
+
+
+def test_find_violations_uv_baseline_none_is_establishing():
+    """baseline=None (lock absent at base ref) -> establishing: even a very
+    young added dep is grandfathered, never a violation."""
+    uv_pkgs = [("brandnew", "0.1.0", NOW - timedelta(hours=1))]
+    violations, warnings, grandfathered = guard.find_violations(
+        uv_pkgs,
+        [],
+        now=NOW,
+        min_age=MIN_AGE,
+        npm_published_at=_no_npm,
+        uv_baseline=None,
+        npm_baseline=None,
+    )
+    assert violations == []
+    assert warnings == []
+    assert len(grandfathered) == 1
+    assert grandfathered[0].name == "brandnew"
+
+
+@pytest.mark.parametrize(
+    ("old_ver", "new_ver", "uploaded", "expect_violation"),
+    [
+        # version changed, new version is young -> violation
+        ("1.0.0", "2.0.0", NOW - timedelta(days=1), True),
+        # version changed, new version is old enough -> no violation
+        ("1.0.0", "2.0.0", NOW - timedelta(days=30), False),
+    ],
+)
+def test_find_violations_uv_version_change(
+    old_ver, new_ver, uploaded, expect_violation
+):
+    uv_pkgs = [("changing", new_ver, uploaded)]
+    violations, warnings, grandfathered = guard.find_violations(
+        uv_pkgs,
+        [],
+        now=NOW,
+        min_age=MIN_AGE,
+        npm_published_at=_no_npm,
+        uv_baseline={("changing", old_ver)},
+        npm_baseline=EMPTY_BASE,
+    )
+    assert warnings == []
+    assert (len(violations) == 1) is expect_violation
+    # When old enough it is neither a violation nor grandfathered-young.
+    if not expect_violation:
+        assert grandfathered == []
+
+
 def test_find_violations_uv_no_upload_time_is_ignored():
     """Root/path dep without an upload-time is never a violation."""
-    violations, warnings = guard.find_violations(
+    violations, warnings, grandfathered = guard.find_violations(
         [("henry-castillo", "0.0.0", None)],
         [],
         now=NOW,
         min_age=MIN_AGE,
         npm_published_at=_no_npm,
+        uv_baseline=EMPTY_BASE,
+        npm_baseline=EMPTY_BASE,
     )
     assert violations == []
     assert warnings == []
+    assert grandfathered == []
 
 
 @pytest.mark.parametrize(
@@ -257,65 +347,117 @@ def test_find_violations_uv_no_upload_time_is_ignored():
     ],
 )
 def test_find_violations_uv_boundary_is_pinned(delta, expect_violation):
+    """The 7-day boundary for a newly added dep is exact and inclusive."""
     uv_pkgs = [("boundary", "2.0.0", NOW - delta)]
-    violations, _ = guard.find_violations(
+    violations, _, _ = guard.find_violations(
         uv_pkgs,
         [],
         now=NOW,
         min_age=MIN_AGE,
         npm_published_at=_no_npm,
+        uv_baseline=EMPTY_BASE,
+        npm_baseline=EMPTY_BASE,
     )
     assert (len(violations) == 1) is expect_violation
 
 
 # ---------------------------------------------------------------------------
-# find_violations — npm side
+# find_violations — npm side (delta semantics)
 # ---------------------------------------------------------------------------
 
 
-def test_find_violations_npm_fresh_is_violation():
+def test_find_violations_npm_fresh_added_is_violation():
     def fetch(name, version):
         assert (name, version) == ("freshnpm", "1.2.3")
         return NOW - timedelta(days=1)
 
-    violations, warnings = guard.find_violations(
+    violations, warnings, grandfathered = guard.find_violations(
         [],
         [("freshnpm", "1.2.3")],
         now=NOW,
         min_age=MIN_AGE,
         npm_published_at=fetch,
+        uv_baseline=EMPTY_BASE,
+        npm_baseline=EMPTY_BASE,
     )
     assert warnings == []
+    assert grandfathered == []
     assert len(violations) == 1
     assert violations[0].ecosystem == "npm"
     assert violations[0].name == "freshnpm"
 
 
-def test_find_violations_npm_old_is_clean():
-    violations, warnings = guard.find_violations(
+def test_find_violations_npm_unchanged_from_baseline_is_grandfathered():
+    """A young npm dep unchanged from baseline is grandfathered, and the
+    registry is still consulted only for *candidate* (new/changed) deps."""
+    violations, warnings, grandfathered = guard.find_violations(
+        [],
+        [("vettednpm", "4.5.6")],
+        now=NOW,
+        min_age=MIN_AGE,
+        # Unchanged deps must NOT trigger a registry lookup.
+        npm_published_at=_no_npm,
+        uv_baseline=EMPTY_BASE,
+        npm_baseline={("vettednpm", "4.5.6")},
+    )
+    assert violations == []
+    assert warnings == []
+    # Unchanged-from-baseline deps are silently trusted (no lookup, so no
+    # publish time to surface) -- they are not in the grandfathered list.
+    assert grandfathered == []
+
+
+def test_find_violations_npm_old_added_is_clean():
+    violations, warnings, grandfathered = guard.find_violations(
         [],
         [("oldnpm", "9.9.9")],
         now=NOW,
         min_age=MIN_AGE,
         npm_published_at=lambda n, v: NOW - timedelta(days=60),
+        uv_baseline=EMPTY_BASE,
+        npm_baseline=EMPTY_BASE,
     )
     assert violations == []
     assert warnings == []
+    assert grandfathered == []
 
 
-def test_find_violations_npm_lookup_failure_is_warning_not_violation():
-    """Fail-open for transient registry errors: a None lookup is a WARNING."""
-    violations, warnings = guard.find_violations(
+def test_find_violations_npm_lookup_failure_on_candidate_is_warning():
+    """Fail-open for transient registry errors: a None lookup on a candidate
+    (added/changed) dep is a WARNING, not a violation."""
+    violations, warnings, grandfathered = guard.find_violations(
         [],
         [("mystery", "0.1.0")],
         now=NOW,
         min_age=MIN_AGE,
         npm_published_at=lambda n, v: None,
+        uv_baseline=EMPTY_BASE,
+        npm_baseline=EMPTY_BASE,
     )
     assert violations == []
+    assert grandfathered == []
     assert len(warnings) == 1
     assert "mystery" in warnings[0]
     assert "0.1.0" in warnings[0]
+
+
+def test_find_violations_npm_baseline_none_is_establishing():
+    """baseline=None for npm -> establishing: a young added npm dep is
+    grandfathered (registry still consulted to surface it), not a violation."""
+    violations, warnings, grandfathered = guard.find_violations(
+        [],
+        [("freshnpm", "2.0.0")],
+        now=NOW,
+        min_age=MIN_AGE,
+        npm_published_at=lambda n, v: NOW - timedelta(days=1),
+        uv_baseline=None,
+        npm_baseline=None,
+    )
+    assert violations == []
+    assert warnings == []
+    assert len(grandfathered) == 1
+    assert grandfathered[0].ecosystem == "npm"
+    assert grandfathered[0].name == "freshnpm"
 
 
 @pytest.mark.parametrize(
@@ -327,12 +469,14 @@ def test_find_violations_npm_lookup_failure_is_warning_not_violation():
     ],
 )
 def test_find_violations_npm_boundary_is_pinned(delta, expect_violation):
-    violations, warnings = guard.find_violations(
+    violations, warnings, _ = guard.find_violations(
         [],
         [("npmboundary", "3.0.0")],
         now=NOW,
         min_age=MIN_AGE,
         npm_published_at=lambda n, v: NOW - delta,
+        uv_baseline=EMPTY_BASE,
+        npm_baseline=EMPTY_BASE,
     )
     assert warnings == []
     assert (len(violations) == 1) is expect_violation
@@ -418,7 +562,91 @@ def test_npm_published_at_version_absent_returns_none():
 
 
 # ---------------------------------------------------------------------------
-# main
+# load_baseline — git read isolation with an injectable runner
+# ---------------------------------------------------------------------------
+
+
+def test_load_baseline_parses_uv_set_from_runner_content():
+    """A runner that returns lock content yields the parsed (name, version)
+    set. The runner is called with (base_ref, path)."""
+    seen = {}
+
+    def runner(base_ref, path):
+        seen["base_ref"] = base_ref
+        seen["path"] = path
+        return UV_LOCK_SAMPLE
+
+    result = guard.load_baseline("origin/main", "uv.lock", kind="uv", runner=runner)
+    assert seen == {"base_ref": "origin/main", "path": "uv.lock"}
+    assert ("annotated-doc", "0.0.4") in result
+    assert ("click", "8.4.0") in result
+
+
+def test_load_baseline_parses_npm_set_from_runner_content():
+    def runner(base_ref, path):
+        return json.dumps(NPM_LOCK_SAMPLE)
+
+    result = guard.load_baseline(
+        "origin/main",
+        "packages/npm/package-lock.json",
+        kind="npm",
+        runner=runner,
+    )
+    assert ("typescript", "5.7.2") in result
+    assert ("@types/node", "25.8.0") in result
+
+
+def test_load_baseline_runner_raising_means_absent_returns_none():
+    """If the path/ref does not exist at the base ref the runner raises;
+    load_baseline maps that to None (== baseline-establishing), never an
+    exception (robust for a pre-commit run with no fetched origin/main)."""
+
+    def runner(base_ref, path):
+        raise guard.BaselineUnavailable("git show failed: bad ref or path")
+
+    assert (
+        guard.load_baseline("origin/main", "uv.lock", kind="uv", runner=runner) is None
+    )
+
+
+def test_load_baseline_npm_invalid_json_yields_empty_set_not_none():
+    """A present-but-unparseable npm baseline is an empty set (the lock
+    existed at base, so pins are still "added"), distinct from None."""
+
+    def runner(base_ref, path):
+        return "{not json"
+
+    result = guard.load_baseline(
+        "origin/main", "p/lock.json", kind="npm", runner=runner
+    )
+    assert result == set()
+
+
+def test_git_show_runner_returns_none_on_called_process_error(monkeypatch):
+    """The default runner shells out to ``git show``; a non-zero exit (ref
+    or path absent) is raised as BaselineUnavailable so load_baseline -> None.
+    """
+
+    def fake_check_output(cmd, *a, **k):
+        assert cmd[:2] == ["git", "show"]
+        raise subprocess.CalledProcessError(128, cmd, b"", b"fatal: bad ref")
+
+    monkeypatch.setattr(subprocess, "check_output", fake_check_output)
+    with pytest.raises(guard.BaselineUnavailable):
+        guard._git_show("origin/main", "uv.lock")
+
+
+def test_git_show_runner_returns_content_on_success(monkeypatch):
+    def fake_check_output(cmd, *a, **k):
+        assert cmd == ["git", "show", "origin/main:uv.lock"]
+        return b"version = 1\n"
+
+    monkeypatch.setattr(subprocess, "check_output", fake_check_output)
+    assert guard._git_show("origin/main", "uv.lock") == "version = 1\n"
+
+
+# ---------------------------------------------------------------------------
+# main — baseline / establishing semantics
 # ---------------------------------------------------------------------------
 
 
@@ -439,27 +667,70 @@ sdist = {{ url = "https://e/v.tgz", upload-time = "{ts}" }}
 """
 
 
-def test_main_clean_returns_zero(tmp_path, capsys):
-    uv_lock, npm_lock = _write_locks(tmp_path, UV_LOCK_SAMPLE, NPM_LOCK_SAMPLE)
-    # Patch the npm fetcher so it never hits the network and reports old pkgs.
+def _baseline_absent(base_ref, path, *, kind, runner=None):
+    """Stand-in for load_baseline when the lock is absent at the base ref."""
+    return None
+
+
+def _baseline_from(*pairs):
+    """Build a load_baseline stand-in returning a fixed (name, version) set
+    regardless of which lock/kind is requested."""
+
+    def _loader(base_ref, path, *, kind, runner=None):
+        return set(pairs)
+
+    return _loader
+
+
+def test_main_establishing_run_grandfathers_young_and_exits_zero(
+    tmp_path, monkeypatch, capsys
+):
+    """THIS PR's scenario: no uv.lock at origin/main -> baseline absent ->
+    establishing. A very fresh dep is grandfathered, exit 0, and the young
+    dep is reported on a clear INFO line for visibility."""
+    fresh = datetime.now(UTC) - timedelta(hours=12)
+    ts = fresh.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    uv_lock, npm_lock = _write_locks(tmp_path, _FRESH_UV.format(ts=ts), NPM_LOCK_SAMPLE)
+    monkeypatch.setattr(guard, "load_baseline", _baseline_absent)
+
     rc = guard.main(
-        [
-            "--uv-lock",
-            str(uv_lock),
-            "--npm-lock",
-            str(npm_lock),
-            "--skip-npm",
-        ]
+        ["--uv-lock", str(uv_lock), "--npm-lock", str(npm_lock), "--skip-npm"]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    low = out.lower()
+    assert "establish" in low
+    assert "veryfresh==9.9.9" in out
+    # No FAIL on an establishing run.
+    assert "FAIL" not in out
+
+
+def test_main_clean_returns_zero(tmp_path, monkeypatch, capsys):
+    uv_lock, npm_lock = _write_locks(tmp_path, UV_LOCK_SAMPLE, NPM_LOCK_SAMPLE)
+    # Baseline equals the current pins -> everything grandfathered, clean.
+    monkeypatch.setattr(
+        guard,
+        "load_baseline",
+        _baseline_from(("annotated-doc", "0.0.4"), ("click", "8.4.0")),
+    )
+    rc = guard.main(
+        ["--uv-lock", str(uv_lock), "--npm-lock", str(npm_lock), "--skip-npm"]
     )
     out = capsys.readouterr().out
     assert rc == 0
     assert "OK" in out or "no violations" in out.lower()
 
 
-def test_main_uv_violation_returns_one_and_reports(tmp_path, capsys):
+def test_main_added_young_dep_returns_one_and_reports(tmp_path, monkeypatch, capsys):
+    """Baseline present and does NOT contain the pin (a future added/upgraded
+    dep) and it is <7d old -> hard failure, exit 1."""
     fresh = datetime.now(UTC) - timedelta(hours=12)
     ts = fresh.strftime("%Y-%m-%dT%H:%M:%S.000Z")
     uv_lock, npm_lock = _write_locks(tmp_path, _FRESH_UV.format(ts=ts), NPM_LOCK_SAMPLE)
+    # Baseline has some *other* package, so veryfresh==9.9.9 is "added".
+    monkeypatch.setattr(
+        guard, "load_baseline", _baseline_from(("something-else", "1.0.0"))
+    )
     rc = guard.main(
         ["--uv-lock", str(uv_lock), "--npm-lock", str(npm_lock), "--skip-npm"]
     )
@@ -467,6 +738,64 @@ def test_main_uv_violation_returns_one_and_reports(tmp_path, capsys):
     assert rc == 1
     assert "veryfresh==9.9.9" in out
     assert "< 7d" in out
+    assert "FAIL" in out
+
+
+def test_main_added_dep_old_enough_is_clean(tmp_path, monkeypatch, capsys):
+    """A newly added dep that is already >=7d old does not fail."""
+    old = datetime.now(UTC) - timedelta(days=30)
+    ts = old.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    uv_lock, npm_lock = _write_locks(tmp_path, _FRESH_UV.format(ts=ts), NPM_LOCK_SAMPLE)
+    monkeypatch.setattr(
+        guard, "load_baseline", _baseline_from(("something-else", "1.0.0"))
+    )
+    rc = guard.main(
+        ["--uv-lock", str(uv_lock), "--npm-lock", str(npm_lock), "--skip-npm"]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "OK" in out or "no violations" in out.lower()
+
+
+def test_main_grandfathered_young_dep_unchanged_is_clean(tmp_path, monkeypatch, capsys):
+    """A young dep whose (name, version) IS in the baseline (unchanged) does
+    not fail even though it is <7d old."""
+    fresh = datetime.now(UTC) - timedelta(hours=12)
+    ts = fresh.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    uv_lock, npm_lock = _write_locks(tmp_path, _FRESH_UV.format(ts=ts), NPM_LOCK_SAMPLE)
+    monkeypatch.setattr(guard, "load_baseline", _baseline_from(("veryfresh", "9.9.9")))
+    rc = guard.main(
+        ["--uv-lock", str(uv_lock), "--npm-lock", str(npm_lock), "--skip-npm"]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "FAIL" not in out
+
+
+def test_main_base_ref_is_passed_to_load_baseline(tmp_path, monkeypatch, capsys):
+    """--base-ref is honored and forwarded to load_baseline."""
+    seen = {}
+
+    def loader(base_ref, path, *, kind, runner=None):
+        seen.setdefault("refs", []).append(base_ref)
+        # Fall through -> returns None == baseline-establishing.
+
+    uv_lock, npm_lock = _write_locks(tmp_path, UV_LOCK_SAMPLE, NPM_LOCK_SAMPLE)
+    monkeypatch.setattr(guard, "load_baseline", loader)
+    rc = guard.main(
+        [
+            "--uv-lock",
+            str(uv_lock),
+            "--npm-lock",
+            str(npm_lock),
+            "--skip-npm",
+            "--base-ref",
+            "origin/develop",
+        ]
+    )
+    assert rc == 0
+    assert seen["refs"] == ["origin/develop"]
+    capsys.readouterr()
 
 
 def test_main_skip_npm_ignores_npm_entirely(tmp_path, monkeypatch, capsys):
@@ -475,6 +804,7 @@ def test_main_skip_npm_ignores_npm_entirely(tmp_path, monkeypatch, capsys):
         raise AssertionError("npm registry must not be queried with --skip-npm")
 
     monkeypatch.setattr(guard, "npm_published_at", boom)
+    monkeypatch.setattr(guard, "load_baseline", _baseline_absent)
     uv_lock, npm_lock = _write_locks(tmp_path, UV_LOCK_SAMPLE, NPM_LOCK_SAMPLE)
     rc = guard.main(
         ["--uv-lock", str(uv_lock), "--npm-lock", str(npm_lock), "--skip-npm"]
@@ -483,9 +813,17 @@ def test_main_skip_npm_ignores_npm_entirely(tmp_path, monkeypatch, capsys):
     capsys.readouterr()
 
 
-def test_main_npm_violation_via_injected_fetcher(tmp_path, monkeypatch, capsys):
+def test_main_npm_added_violation_via_injected_fetcher(tmp_path, monkeypatch, capsys):
+    """A future npm bump: pin not in baseline + <7d via the registry -> fail."""
     fresh = datetime.now(UTC) - timedelta(days=1)
     monkeypatch.setattr(guard, "npm_published_at", lambda n, v, **k: fresh)
+    # uv baseline matches its pins; npm baseline is empty so npm pins are
+    # "added" candidates and get the registry check.
+    monkeypatch.setattr(
+        guard,
+        "load_baseline",
+        _baseline_from(("annotated-doc", "0.0.4"), ("click", "8.4.0")),
+    )
     uv_lock, npm_lock = _write_locks(tmp_path, UV_LOCK_SAMPLE, NPM_LOCK_SAMPLE)
     rc = guard.main(["--uv-lock", str(uv_lock), "--npm-lock", str(npm_lock)])
     out = capsys.readouterr().out
@@ -495,6 +833,9 @@ def test_main_npm_violation_via_injected_fetcher(tmp_path, monkeypatch, capsys):
 
 def test_main_npm_registry_error_is_warning_only(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(guard, "npm_published_at", lambda n, v, **k: None)
+    # Establishing so uv pins don't fail; npm candidates still get looked up
+    # (registry error -> warning, not violation, not blocked).
+    monkeypatch.setattr(guard, "load_baseline", _baseline_absent)
     uv_lock, npm_lock = _write_locks(tmp_path, UV_LOCK_SAMPLE, NPM_LOCK_SAMPLE)
     rc = guard.main(["--uv-lock", str(uv_lock), "--npm-lock", str(npm_lock)])
     out = capsys.readouterr().out
@@ -503,7 +844,8 @@ def test_main_npm_registry_error_is_warning_only(tmp_path, monkeypatch, capsys):
     assert "typescript" in out
 
 
-def test_main_missing_lock_files_returns_zero(tmp_path, capsys):
+def test_main_missing_current_lock_files_returns_zero(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(guard, "load_baseline", _baseline_absent)
     rc = guard.main(
         [
             "--uv-lock",
@@ -517,11 +859,14 @@ def test_main_missing_lock_files_returns_zero(tmp_path, capsys):
     capsys.readouterr()
 
 
-def test_main_min_age_days_is_honored(tmp_path, capsys):
-    # Package uploaded 10 days ago: fine at default 7, a violation at 14.
+def test_main_min_age_days_is_honored(tmp_path, monkeypatch, capsys):
+    # Added package uploaded 10 days ago: fine at default 7, fails at 14.
     ten_days = datetime.now(UTC) - timedelta(days=10)
     ts = ten_days.strftime("%Y-%m-%dT%H:%M:%S.000Z")
     uv_lock, npm_lock = _write_locks(tmp_path, _FRESH_UV.format(ts=ts), NPM_LOCK_SAMPLE)
+    monkeypatch.setattr(
+        guard, "load_baseline", _baseline_from(("something-else", "1.0.0"))
+    )
 
     rc_default = guard.main(
         ["--uv-lock", str(uv_lock), "--npm-lock", str(npm_lock), "--skip-npm"]
@@ -546,10 +891,15 @@ def test_main_min_age_days_is_honored(tmp_path, capsys):
     assert "< 14d" in out
 
 
-def test_main_report_text_is_exact_for_uv_violation(tmp_path, capsys):
+def test_main_report_text_is_exact_for_added_uv_violation(
+    tmp_path, monkeypatch, capsys
+):
     uploaded = datetime.now(UTC) - timedelta(hours=24)
     ts = uploaded.strftime("%Y-%m-%dT%H:%M:%S.000Z")
     uv_lock, npm_lock = _write_locks(tmp_path, _FRESH_UV.format(ts=ts), NPM_LOCK_SAMPLE)
+    monkeypatch.setattr(
+        guard, "load_baseline", _baseline_from(("something-else", "1.0.0"))
+    )
     rc = guard.main(
         ["--uv-lock", str(uv_lock), "--npm-lock", str(npm_lock), "--skip-npm"]
     )
