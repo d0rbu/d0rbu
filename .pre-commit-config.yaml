@@ -49,3 +49,9 @@ repos:
         language: system
         pass_filenames: false
         files: ^(pyproject\.toml|uv\.lock)$
+      - id: min-dependency-age
+        name: minimum dependency age (uv lock, >=7d)
+        entry: uv run python scripts/check_min_dependency_age.py --skip-npm
+        language: system
+        pass_filenames: false
+        files: ^(uv\.lock|pyproject\.toml)$

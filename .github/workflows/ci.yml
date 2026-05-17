@@ -94,6 +94,10 @@ jobs:
           enable-cache: true
       - run: uv export --frozen --no-emit-project --no-dev -o requirements-audit.txt
       - run: uvx pip-audit -r requirements-audit.txt
+      # Rolling >=7-day minimum dependency age (uv lock offline + npm via
+      # registry; network is available in CI). Complements Dependabot's
+      # cooldown, which only gates Dependabot's own PRs.
+      - run: uv run python scripts/check_min_dependency_age.py --uv-lock uv.lock --npm-lock packages/npm/package-lock.json
       - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
