@@ -16,11 +16,19 @@ from henry_castillo import update as _update
 
 _BANNER = "henry-castillo {version}"
 
+_FALSEY_ENV = {"", "0", "false", "no", "off"}
+
+
+def _update_check_disabled_by_env() -> bool:
+    val = os.environ.get("HENRY_CASTILLO_NO_UPDATE_CHECK")
+    return val is not None and val.strip().lower() not in _FALSEY_ENV
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="henry-castillo",
         description="Henry Castillo's personal CLI business card.",
+        allow_abbrev=False,
     )
     parser.add_argument("--version", action="store_true", help="print version and exit")
     parser.add_argument(
@@ -43,7 +51,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _maybe_notice(args: argparse.Namespace) -> None:
     """Print a one-line update notice, only when interactive and allowed."""
-    if args.no_update_check or os.environ.get("HENRY_CASTILLO_NO_UPDATE_CHECK"):
+    if args.no_update_check or _update_check_disabled_by_env():
         return
     if not sys.stdout.isatty():  # never in pipes/CI/tests
         return
