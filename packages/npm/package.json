@@ -22,11 +22,14 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "format": "biome format --write .",
-    "test": "vitest run"
+    "pretest": "tsup",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",
     "@types/node": "^25.8.0",
+    "@vitest/coverage-v8": "2.1.9",
     "tsup": "8.3.5",
     "typescript": "5.7.2",
     "vitest": "2.1.9"
