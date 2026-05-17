@@ -36,3 +36,10 @@ The release workflow builds, generates the changelog, publishes to PyPI via
 Trusted Publishing, and creates a GitHub Release with an SBOM. Use the
 workflow's `workflow_dispatch` with `dry_run=true` to rehearse without
 publishing.
+
+## One-time PyPI Trusted Publishing setup (maintainer)
+
+Before the first real publish, create the project on PyPI and add a Trusted
+Publisher: PyPI → project → Publishing → add GitHub publisher with
+owner `d0rbu`, repo `d0rbu`, workflow `release.yml`, environment `pypi`.
+Until then, use `workflow_dispatch` with `dry_run=true` to rehearse.
