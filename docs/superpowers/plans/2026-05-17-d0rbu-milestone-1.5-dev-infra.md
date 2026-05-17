@@ -225,7 +225,7 @@ dev = [
   "pytest>=8",
   "pytest-cov>=5",
   "ruff>=0.6",
-  "ty",
+  "ty>=0.0.37",
   "pre-commit>=3.8",
 ]
 ```
@@ -823,6 +823,7 @@ repos:
       - id: check-toml
       - id: check-json
       - id: check-added-large-files
+        args: ['--maxkb=500']
       - id: check-merge-conflict
       - id: mixed-line-ending
         args: [--fix=lf]
@@ -1429,6 +1430,7 @@ jobs:
       - uses: github/codeql-action/init@v3
         with:
           language: ${{ matrix.language }}
+          build-mode: none
       - uses: github/codeql-action/analyze@v3
         with:
           category: "/language:${{ matrix.language }}"
@@ -1565,7 +1567,7 @@ jobs:
         with:
           name: dist
           path: .
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0
         with:
           packages-dir: dist
 
@@ -1700,6 +1702,7 @@ jobs:
           node-version: "20"
       - working-directory: web
         run: npm ci && npm run build
+      # M3: if the web framework needs base path at build time, move configure-pages above the build step and pass its output.
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
@@ -1807,10 +1810,12 @@ Expected: zizmor clean; CI still green (the Pages workflow's `guard` job runs an
 
 ## Iteration 14: Hardening + polish refinement pass
 
+> **Status: DONE.** All carry-forward items applied: `ty>=0.0.37` pin, `--maxkb=500` on check-added-large-files, `build-mode: none` in codeql.yml init, SHA-pinned PyPI publish action (`@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0`), pages.yml M3 ordering comment. Workflow audit: all perms/timeouts/concurrency/untrusted-input checks pass. zizmor rc=0 no findings. Full gate green.
+
 **Files:**
 - Modify: `README.md`; review-only: all `.github/workflows/*.yml`
 
-- [ ] **Step 1: Hardening audit of every workflow**
+- [x] **Step 1: Hardening audit of every workflow**
 
 Read each file in `.github/workflows/`. Verify ALL of these hold (fix any that don't):
 - top-level `permissions: contents: read` present; jobs that need more declare the minimal extra (`id-token: write`, `contents: write`, `pages: write`, `security-events: write`, `pull-requests: read`) and nothing broader.
@@ -1819,7 +1824,7 @@ Read each file in `.github/workflows/`. Verify ALL of these hold (fix any that d
 - no use of `pull_request_target`; no inline `${{ }}` interpolation of untrusted input into `run:`.
 Re-run `uvx zizmor --persona=pedantic .github/workflows` — expected: no `error`/`warning`.
 
-- [ ] **Step 2: Add status badges + M1.5 note — modify `README.md`**
+- [x] **Step 2: Add status badges + M1.5 note — modify `README.md`**
 
 Directly under the first line `# d0rbu`, insert a blank line then:
 ```markdown
@@ -1835,14 +1840,14 @@ In the `## Roadmap` list, change the line `1. **Repo skeleton** — this milesto
 ```
 (Keep the remaining items; Markdown auto-numbers.)
 
-- [ ] **Step 3: Full local gate**
+- [x] **Step 3: Full local gate**
 
 ```bash
 make check && (cd packages/npm && npm ci && npm run lint && npm run typecheck && npm test && npm run build && cd ../.. ) && uvx zizmor --persona=pedantic .github/workflows
 ```
 Expected: everything green.
 
-- [ ] **Step 4: Commit + push**
+- [x] **Step 4: Commit + push**
 
 ```bash
 rm -rf packages/npm/dist packages/npm/node_modules

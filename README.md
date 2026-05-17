@@ -1,5 +1,10 @@
 # d0rbu
 
+[![CI](https://github.com/d0rbu/d0rbu/actions/workflows/ci.yml/badge.svg)](https://github.com/d0rbu/d0rbu/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/d0rbu/d0rbu/actions/workflows/codeql.yml/badge.svg)](https://github.com/d0rbu/d0rbu/actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-informational.svg)](LICENSE)
+![Python](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue)
+
 Henry Castillo's personal website and CLI "business card".
 One repository, one source of truth for content — rendered both as a static
 website and as a terminal CLI published to PyPI and npm as `henry-castillo`.
@@ -38,7 +43,8 @@ docs/         design spec and implementation plans
 
 ## Roadmap
 
-1. **Repo skeleton** — this milestone.
+1. **Repo skeleton** — done.
+1. **Dev infrastructure** — done (uv/ruff/ty/pytest, CI, release & deploy automation, auto-update, TS toolchain).
 2. **CLI** — interactive card + subcommands, published to PyPI.
 3. **Website** — static site, deployed to GitHub Pages.
 4. **npm distribution** — thin wrapper shipping a frozen binary.
