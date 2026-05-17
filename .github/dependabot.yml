@@ -4,11 +4,10 @@ updates:
     directory: "/"
     schedule: { interval: "weekly" }
     commit-message: { prefix: "build" }
-    # Supply-chain: let releases age before a bump is proposed so a freshly
-    # compromised/yanked version is not auto-PR'd. >=7 days is the floor.
+    # Supply-chain: let releases age >=7 days before a bump is proposed so a
+    # freshly compromised or yanked version is not auto-PR'd.
     cooldown:
       default-days: 7
-      semver-major-days: 14
     groups:
       python-deps: { patterns: ["*"] }
   - package-ecosystem: "github-actions"
@@ -17,7 +16,6 @@ updates:
     commit-message: { prefix: "ci" }
     cooldown:
       default-days: 7
-      semver-major-days: 14
     groups:
       actions: { patterns: ["*"] }
   - package-ecosystem: "npm"
@@ -26,6 +24,5 @@ updates:
     commit-message: { prefix: "build" }
     cooldown:
       default-days: 7
-      semver-major-days: 14
     groups:
       ts-deps: { patterns: ["*"] }

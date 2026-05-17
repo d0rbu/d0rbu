@@ -19,9 +19,8 @@ Actions):
   comments); `zizmor`'s `unpinned-uses` policy enforces `hash-pin` repo-wide,
   so a moved or compromised tag cannot inject code.
 - **Dependabot** runs weekly for all ecosystems (uv, github-actions, npm)
-  with a **≥7-day release cooldown** (14 days for major bumps) so a freshly
-  compromised or yanked release is not auto-proposed, and keeps the pinned
-  SHAs current.
+  with a **≥7-day release cooldown** so a freshly compromised or yanked
+  release is not auto-proposed, and keeps the pinned SHAs current.
 - **OpenSSF Scorecard** scores the repo's supply-chain posture weekly and
   uploads results to code scanning.
 - **SLSA build provenance** (`actions/attest-build-provenance`) is signed for
