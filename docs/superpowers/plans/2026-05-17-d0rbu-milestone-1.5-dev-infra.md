@@ -826,12 +826,6 @@ repos:
       - id: check-merge-conflict
       - id: mixed-line-ending
         args: [--fix=lf]
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.4
-    hooks:
-      - id: ruff
-        args: [--fix]
-      - id: ruff-format
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.21.2
     hooks:
@@ -843,6 +837,18 @@ repos:
         stages: [commit-msg]
   - repo: local
     hooks:
+      - id: ruff
+        name: ruff lint
+        entry: uv run ruff check --fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
       - id: ty
         name: ty type check
         entry: uv run ty check
@@ -856,6 +862,8 @@ repos:
         pass_filenames: false
         files: ^(pyproject\.toml|uv\.lock)$
 ```
+
+(ruff/ruff-format run via `uv run` as local hooks so pre-commit and CI use the project's single pinned ruff — no version skew.)
 
 - [ ] **Step 2: Install hooks and run on all files**
 
