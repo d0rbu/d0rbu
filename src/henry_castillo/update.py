@@ -24,7 +24,7 @@ def current_version() -> str:
     """Installed distribution version, falling back to the package attribute."""
     try:
         return version(PACKAGE)
-    except PackageNotFoundError:  # pragma: no cover - only when not installed
+    except PackageNotFoundError:
         from henry_castillo import __version__  # noqa: PLC0415
 
         return __version__
@@ -32,7 +32,9 @@ def current_version() -> str:
 
 def cache_path() -> Path:
     """Per-user cache file for the throttled update check."""
-    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    base = os.environ.get("XDG_CACHE_HOME")
+    if not base or not Path(base).is_absolute():
+        base = str(Path.home() / ".cache")
     return Path(base) / "henry-castillo" / "update-check.json"
 
 
@@ -41,7 +43,10 @@ def fetch_latest_version(timeout: float = 2.0, *, url: str = PYPI_URL) -> str | 
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310
             data = json.load(resp)
-        return str(data["info"]["version"])
+        v = data["info"]["version"]
+        if not isinstance(v, str):
+            return None
+        return v
     except (urllib.error.URLError, OSError, ValueError, KeyError):
         return None
 
@@ -56,16 +61,17 @@ def is_outdated(current: str, latest: str) -> bool:
 
 def _read_cache(path: Path) -> dict:
     try:
-        return json.loads(path.read_text())
+        data = json.loads(path.read_text())
     except (OSError, ValueError):
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _write_cache(path: Path, payload: dict) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload))
-    except OSError:  # pragma: no cover - cache is best-effort
+    except OSError:
         pass
 
 
@@ -119,6 +125,6 @@ def perform_update() -> int:
     print("Running:", " ".join(cmd))
     try:
         return subprocess.call(cmd)  # noqa: S603
-    except OSError as exc:  # pragma: no cover - environment dependent
+    except OSError as exc:
         print(f"Update failed: {exc}")
         return 1
