@@ -21,15 +21,26 @@ Actions):
 - **Dependabot** runs weekly for all ecosystems (uv, github-actions, npm)
   with a **≥7-day release cooldown** so a freshly compromised or yanked
   release is not auto-proposed, and keeps the pinned SHAs current.
-- **Rolling ≥7-day minimum dependency age** is enforced on every lockfile
-  change (`scripts/check_min_dependency_age.py`): pre-commit runs it offline
-  (uv.lock, which records each package's `upload-time`), and CI runs the full
-  check (uv.lock offline + npm versions resolved against the npm registry).
+- **Rolling ≥7-day minimum age for newly added or upgraded dependencies**
+  (`scripts/check_min_dependency_age.py`). The baseline is the lockfiles at
+  `origin/main`; a pinned `(name, version)` that is **added or
+  version-changed** versus that baseline must have been published at least
+  7 days ago. Pins unchanged from the baseline are grandfathered — the
+  already-vetted committed lock is the trusted baseline; the supply-chain
+  threat is a *new or upgraded* fresh release entering, not a pin that was
+  already there. This is the same semantics as Dependabot's `cooldown`,
+  applied to any lock bump (manual or Dependabot) once it would land — not a
+  retroactive audit of the whole lockfile. Pre-commit runs it offline
+  (uv.lock records each package's `upload-time`); CI runs the full check
+  (uv.lock offline + npm candidates resolved against the npm registry).
   Neither `uv` nor `npm` has a native *rolling* minimum-release-age setting at
   the lock layer — Dependabot's cooldown only gates Dependabot's own PRs — so
-  this guard provides that missing protection for any lock bump (manual or
-  Dependabot) before it can land. A confirmed too-fresh package fails the
-  check; a transient npm-registry lookup error is a warning, not a block.
+  this guard supplies that missing protection for new/changed deps. The first
+  PR that introduces the lockfiles (no committed lock at `origin/main`) is
+  *baseline-establishing* and passes, listing the young deps for visibility;
+  every subsequent bump is enforced. A confirmed too-fresh added/upgraded
+  package fails the check; a transient npm-registry lookup error is a warning,
+  not a block.
 - **OpenSSF Scorecard** scores the repo's supply-chain posture weekly and
   uploads results to code scanning.
 - **SLSA build provenance** (`actions/attest-build-provenance`) is signed for
