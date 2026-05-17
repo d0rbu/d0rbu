@@ -19,6 +19,7 @@ classifiers = [
 dependencies = [
   "rich>=13",
   "questionary>=2",
+  "packaging>=23",
 ]
 
 [project.optional-dependencies]

@@ -308,6 +308,7 @@ wheels = [
 name = "henry-castillo"
 source = { editable = "." }
 dependencies = [
+    { name = "packaging" },
     { name = "questionary" },
     { name = "rich" },
 ]
@@ -328,6 +329,7 @@ lab = [
 
 [package.metadata]
 requires-dist = [
+    { name = "packaging", specifier = ">=23" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.8" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5" },
