@@ -70,3 +70,7 @@ known-first-party = ["henry_castillo"]
 
 [tool.ruff.format]
 docstring-code-format = true
+
+[tool.ty.environment]
+python-version = "3.10"
+root = ["src"]
