@@ -20,6 +20,9 @@ make precommit # run all pre-commit hooks
   `build:`, `docs:`, `test:`, `perf:`, `refactor:`). PR titles are linted too.
 - `uv.lock` is committed; if you change dependencies run `uv lock` and commit
   it. CI verifies it with `uv lock --locked`.
+- A lockfile bump (uv or npm) that introduces a release published less than
+  7 days ago fails the `min-dependency-age` pre-commit hook and CI; wait for
+  the release to age past 7 days (this matches the Dependabot cooldown).
 - Code must pass `ruff` (lint + format) and `ty` (typing). New behavior needs
   tests; coverage is gated at 90%.
 
