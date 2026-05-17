@@ -357,7 +357,7 @@ exclude_lines = [
 ```bash
 uv run pytest
 ```
-Expected: `4 passed`; a coverage table prints; total coverage ≥ 90% (the current package is the tiny stub, fully exercised by the smoke tests); `coverage.xml` generated. If coverage is < 90% because of an untested line, that line will be covered by the dedicated tests added in Iteration 6 — for now, if and only if the gate fails here, temporarily confirm the failing lines are only in `update.py` (which does not exist yet) — it is not; the stub is fully covered, so this must pass. If it does not, STOP and report.
+Expected: `4 passed`; a coverage table prints; total coverage ≥ 90% (the current package is the tiny stub, fully exercised by the smoke tests); `coverage.xml` generated. If coverage is < 90% because of an untested line, that line will be covered by the dedicated tests added in Iteration 6 — for now, if and only if the gate fails here, temporarily confirm the failing lines are only in `update.py` (which does not exist yet) — it is not; the stub is fully covered, so this must pass. If it does not, STOP and report. — except the `argv is None` default branch, which Iteration 5 covers by adding `test_main_uses_sys_argv_when_argv_is_none` to `tests/test_smoke.py`.
 
 - [ ] **Step 3: Ignore coverage artifact — modify `.gitignore`**
 

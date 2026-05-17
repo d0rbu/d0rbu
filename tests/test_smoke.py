@@ -28,3 +28,11 @@ def test_alias_entrypoint_runs():
     result = subprocess.run(["d0rbu"], capture_output=True, text=True, check=False)
     assert result.returncode == 0
     assert "henry-castillo" in result.stdout
+
+
+def test_main_uses_sys_argv_when_argv_is_none(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["henry-castillo"])
+    rc = main(None)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "henry-castillo" in out
