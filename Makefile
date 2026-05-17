@@ -27,7 +27,7 @@ cov: ## Tests with coverage (already enforced via addopts)
 precommit: ## Run all pre-commit hooks
 	uv run pre-commit run --all-files
 
-check: lint typecheck test ## Lint + type + test (the CI gate)
+check: lint typecheck test ## Lint + type + test + format-check (the CI gate)
 	uv run ruff format --check .
 
 build: ## Build sdist + wheel
