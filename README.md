@@ -9,7 +9,7 @@ Henry Castillo's personal website and CLI "business card".
 One repository, one source of truth for content — rendered both as a static
 website and as a terminal CLI published to PyPI and npm as `henry-castillo`.
 
-> **Status:** scaffold (Milestone 1). The CLI, website, and packaging land in
+> **Status:** scaffold + dev infrastructure (Milestones 1–1.5). The CLI, website, and packaging land in
 > subsequent milestones — see the design spec and roadmap below.
 
 ## What this is

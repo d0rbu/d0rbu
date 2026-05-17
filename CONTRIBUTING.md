@@ -49,3 +49,11 @@ Before the first real publish, create the project on PyPI and add a Trusted
 Publisher: PyPI → project → Publishing → add GitHub publisher with
 owner `d0rbu`, repo `d0rbu`, workflow `release.yml`, environment `pypi`.
 Until then, use `workflow_dispatch` with `dry_run=true` to rehearse.
+
+### Action pinning policy
+
+The PyPI publish action (`pypa/gh-action-pypi-publish`) is pinned to a full
+commit SHA (with a `# vX.Y.Z` comment so Dependabot still bumps it) because it
+receives the OIDC publish token. All other GitHub Actions are tag-pinned and
+kept current by Dependabot (`github-actions` ecosystem); `zizmor`'s
+`unpinned-uses` policy enforces at least ref-pinning repo-wide.

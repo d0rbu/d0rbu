@@ -1862,7 +1862,9 @@ git push
 
 ## Iteration 15: Final verification & mark PR ready
 
-**Files:** none (verification + PR state)
+**Files:** README.md (status accuracy), CONTRIBUTING.md (action-pinning policy), plan doc (this note); then verification + PR state
+
+*Applied two polish fixes carried from review: (1) README status updated to "Milestones 1–1.5"; (2) CONTRIBUTING action-pinning-policy subsection added.*
 
 - [ ] **Step 1: Confirm full green on the PR**
 
