@@ -1565,7 +1565,6 @@ jobs:
         with:
           name: dist
           path: .
-      - run: mkdir -p dist && find dist -maxdepth 1 -type f -name '*.whl' -o -name '*.tar.gz' | head -1
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
@@ -1587,6 +1586,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 ```
+
+(The dead artifact-probe line was removed; the only canonical real-release path is a vX.Y.Z tag push — see CONTRIBUTING "Releasing".)
 
 (Hardened to satisfy zizmor pedantic: persist-credentials:false on checkout; documented id-token/contents perms; setup-uv enable-cache:false because an artifact-publishing workflow must not consume build caches — cache-poisoning class.)
 

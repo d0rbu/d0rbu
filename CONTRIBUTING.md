@@ -17,7 +17,7 @@ make precommit # run all pre-commit hooks
 ## Conventions
 
 - **Conventional Commits** are enforced (`feat:`, `fix:`, `chore:`, `ci:`,
-  `build:`, `docs:`, `test:`, `refactor:`). PR titles are linted too.
+  `build:`, `docs:`, `test:`, `perf:`, `refactor:`). PR titles are linted too.
 - `uv.lock` is committed; if you change dependencies run `uv lock` and commit
   it. CI verifies it with `uv lock --locked`.
 - Code must pass `ruff` (lint + format) and `ty` (typing). New behavior needs
@@ -36,6 +36,12 @@ The release workflow builds, generates the changelog, publishes to PyPI via
 Trusted Publishing, and creates a GitHub Release with an SBOM. Use the
 workflow's `workflow_dispatch` with `dry_run=true` to rehearse without
 publishing.
+
+The only supported real-release path is pushing a `vX.Y.Z` tag (which builds,
+publishes to PyPI, and creates a GitHub Release with the changelog + SBOM).
+`workflow_dispatch` with `dry_run=false` publishes to PyPI **without** creating
+a GitHub Release — use it only for exceptional manual recovery, not as the
+normal release path.
 
 ## One-time PyPI Trusted Publishing setup (maintainer)
 
