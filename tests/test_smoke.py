@@ -18,13 +18,13 @@ def test_main_returns_zero_and_prints_name(capsys):
 
 def test_console_entrypoint_runs():
     result = subprocess.run(
-        ["henry-castillo"], capture_output=True, text=True
+        ["henry-castillo"], capture_output=True, text=True, check=False
     )
     assert result.returncode == 0
     assert "henry-castillo" in result.stdout
 
 
 def test_alias_entrypoint_runs():
-    result = subprocess.run(["d0rbu"], capture_output=True, text=True)
+    result = subprocess.run(["d0rbu"], capture_output=True, text=True, check=False)
     assert result.returncode == 0
     assert "henry-castillo" in result.stdout
