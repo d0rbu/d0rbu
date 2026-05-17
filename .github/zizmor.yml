@@ -2,4 +2,7 @@ rules:
   unpinned-uses:
     config:
       policies:
-        "*": ref-pin
+        # Supply-chain: every action must be pinned to a full commit SHA
+        # (a moved/compromised tag is a code-execution vector). Dependabot
+        # (github-actions ecosystem, >=7-day cooldown) keeps the SHAs current.
+        "*": hash-pin

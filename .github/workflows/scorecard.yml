@@ -1,0 +1,41 @@
+name: Scorecard
+
+on:
+  branch_protection_rule:
+  schedule:
+    # Weekly, offset minute to avoid the top-of-hour scheduler stampede.
+    - cron: "41 4 * * 1"
+  push:
+    branches: [main]
+
+# Least privilege by default; jobs escalate the minimum they need.
+permissions:
+  contents: read
+
+concurrency:
+  # Never cancel an in-flight Scorecard run: a cancelled run leaves code
+  # scanning without fresh supply-chain posture results. Queue instead.
+  group: scorecard-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  analysis:
+    name: Scorecard supply-chain analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      security-events: write  # upload Scorecard SARIF to code scanning
+      id-token: write         # OIDC token to publish results to the OpenSSF API
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - id: scorecard
+        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba # v4.35.5
+        with:
+          sarif_file: results.sarif
