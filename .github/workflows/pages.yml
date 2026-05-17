@@ -53,6 +53,7 @@ jobs:
           node-version: "20"
       - working-directory: web
         run: npm ci && npm run build
+      # M3: if the web framework needs base path at build time, move configure-pages above the build step and pass its output.
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

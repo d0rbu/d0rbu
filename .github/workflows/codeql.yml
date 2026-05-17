@@ -36,6 +36,7 @@ jobs:
       - uses: github/codeql-action/init@v3
         with:
           language: ${{ matrix.language }}
+          build-mode: none
       - uses: github/codeql-action/analyze@v3
         with:
           category: "/language:${{ matrix.language }}"

@@ -339,7 +339,7 @@ requires-dist = [
     { name = "textual", marker = "extra == 'lab'" },
     { name = "torch", marker = "extra == 'lab'" },
     { name = "transformers", marker = "extra == 'lab'" },
-    { name = "ty", marker = "extra == 'dev'" },
+    { name = "ty", marker = "extra == 'dev'", specifier = ">=0.0.37" },
 ]
 provides-extras = ["dev", "lab"]
 
