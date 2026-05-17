@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "henry-castillo"
+dynamic = ["version"]
+description = "Henry Castillo's personal website + CLI business card."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Henry Castillo" }]
+keywords = ["cli", "business-card", "personal-website"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Environment :: Console",
+]
+dependencies = [
+  "rich>=13",
+  "questionary>=2",
+]
+
+[project.optional-dependencies]
+lab = ["torch", "transformers", "textual"]
+dev = ["pytest>=8"]
+
+[project.urls]
+Homepage = "https://github.com/d0rbu/d0rbu"
+Repository = "https://github.com/d0rbu/d0rbu"
+
+[project.scripts]
+henry-castillo = "henry_castillo.__main__:main"
+d0rbu = "henry_castillo.__main__:main"
+d0rb = "henry_castillo.__main__:main"
+hc = "henry_castillo.__main__:main"
+henry = "henry_castillo.__main__:main"
+secret-string-lol = "henry_castillo.__main__:main"
+
+[tool.hatch.version]
+path = "src/henry_castillo/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/henry_castillo"]
