@@ -1,0 +1,61 @@
+name: Deploy site
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: check for web/ site
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      has_site: ${{ steps.check.outputs.has_site }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: check
+        run: |
+          if [ -f web/package.json ] || [ -f web/index.html ]; then
+            echo "has_site=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_site=false" >> "$GITHUB_OUTPUT"
+            echo "No site in web/ yet (arrives in Milestone 3); skipping."
+          fi
+
+  deploy:
+    name: build and deploy site
+    needs: guard
+    if: needs.guard.outputs.has_site == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      pages: write      # publish the built site to GitHub Pages
+      id-token: write   # OIDC for GitHub Pages deployment
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - working-directory: web
+        run: npm ci && npm run build
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+      - id: deploy
+        uses: actions/deploy-pages@v4
