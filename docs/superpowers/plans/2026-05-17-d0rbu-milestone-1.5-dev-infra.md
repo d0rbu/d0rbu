@@ -1534,7 +1534,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
       - run: uv build
       - run: uvx twine check dist/*
       - run: uvx git-cliff --latest --output RELEASE_NOTES.md
@@ -1556,7 +1559,7 @@ jobs:
     timeout-minutes: 10
     environment: pypi
     permissions:
-      id-token: write
+      id-token: write  # OIDC token for PyPI Trusted Publishing
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -1574,7 +1577,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: write
+      contents: write  # create the GitHub Release
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -1585,7 +1588,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 ```
 
+(Hardened to satisfy zizmor pedantic: persist-credentials:false on checkout; documented id-token/contents perms; setup-uv enable-cache:false because an artifact-publishing workflow must not consume build caches — cache-poisoning class.)
+
 - [ ] **Step 4: Lint workflows + rehearse the build job logic locally**
+
+Note: GitHub only registers `workflow_dispatch` for workflows on the repo's DEFAULT branch (`main`). This means `gh workflow run release.yml --ref milestone-1.5-dev-infra` cannot run pre-merge from the feature branch — the GH dry-run is inherently a post-merge step. The release build logic is therefore validated LOCALLY before commit:
 
 ```bash
 uvx zizmor --persona=pedantic .github/workflows 2>&1 | tail -20
@@ -1606,7 +1613,7 @@ owner `d0rbu`, repo `d0rbu`, workflow `release.yml`, environment `pypi`.
 Until then, use `workflow_dispatch` with `dry_run=true` to rehearse.
 ```
 
-- [ ] **Step 6: Commit, push, verify the dry-run**
+- [ ] **Step 6: Commit and push**
 
 ```bash
 git add .github/workflows/release.yml cliff.toml CHANGELOG.md CONTRIBUTING.md
@@ -1614,11 +1621,18 @@ git commit -m "ci: add release automation (Trusted Publishing, changelog, SBOM)
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 git push
-gh workflow run release.yml -f dry_run=true --ref milestone-1.5-dev-infra
+```
+
+- [ ] **Step 7: Post-merge `workflow_dispatch` dry-run rehearsal (run from `main` after PR merges)**
+
+GitHub registers `workflow_dispatch` only for workflows on the DEFAULT branch. The command below therefore cannot run pre-merge; run it after the PR is merged to `main`:
+
+```bash
+gh workflow run release.yml -f dry_run=true
 sleep 25 && gh run list --workflow=release.yml -L 1
 gh run watch "$(gh run list --workflow=release.yml -L 1 --json databaseId -q '.[0].databaseId')"
 ```
-Expected: the `build` job succeeds; `publish` is skipped (dry_run); `github-release` is skipped (not a tag). Fix-forward on failure.
+Expected: the `build` job succeeds; `publish` is skipped (dry_run=true, so the `if: github.event_name == 'push' || inputs.dry_run == false` condition is false); `github-release` is skipped (not a tag). Fix-forward on failure.
 
 ---
 
