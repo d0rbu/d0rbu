@@ -1065,6 +1065,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+          python-version: "3.10"
       - run: uv sync --extra dev
       - run: uv run ruff check --output-format=github .
       - run: uv run ruff format --check .
@@ -1088,6 +1089,7 @@ jobs:
       - run: uv python install ${{ matrix.python }}
       - run: uv sync --extra dev --python ${{ matrix.python }}
       - run: uv run --python ${{ matrix.python }} pytest
+      # Upload coverage from a single representative stable version
       - uses: actions/upload-artifact@v4
         if: matrix.python == '3.12'
         with:
@@ -1101,6 +1103,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
       - run: uv build
       - run: uvx twine check dist/*
 
@@ -1113,6 +1117,8 @@ jobs:
         with:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
       - run: uv export --frozen --no-emit-project --no-dev -o requirements-audit.txt
       - run: uvx pip-audit -r requirements-audit.txt
       - uses: gitleaks/gitleaks-action@v2
@@ -1126,7 +1132,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uvx zizmor --persona=pedantic .github/workflows
+      - run: uvx zizmor --persona=pedantic --config .github/zizmor.yml .github/workflows
 
   pr-title:
     name: conventional PR title
