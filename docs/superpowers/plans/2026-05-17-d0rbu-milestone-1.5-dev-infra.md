@@ -1214,6 +1214,7 @@ Expected: all jobs eventually succeed. If a job fails, read the log (`gh run vie
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",
+    "@types/node": "^25.8.0",
     "tsup": "8.3.5",
     "typescript": "5.7.2",
     "vitest": "2.1.8"
@@ -1236,13 +1237,15 @@ Expected: all jobs eventually succeed. If a job fails, read the log (`gh run vie
     "verbatimModuleSyntax": true,
     "declaration": true,
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": ".",
     "skipLibCheck": true,
-    "types": ["vitest/globals"]
+    "types": ["vitest/globals", "node"]
   },
   "include": ["src", "test"]
 }
 ```
+
+(rootDir is `.` because `include` spans both `src` and `test`; `@types/node` + `"node"` in `types` are required since the scaffold uses `process`/`import.meta`/`console`.)
 
 - [ ] **Step 3: Create `packages/npm/biome.json`**
 
