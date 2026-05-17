@@ -298,10 +298,9 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```toml
 [tool.ty.environment]
 python-version = "3.10"
-
-[tool.ty.src]
-root = "src"
+root = ["src"]
 ```
+(ty 0.0.37 deprecated `[tool.ty.src]`; `root` is an array under `[tool.ty.environment]`.)
 
 - [ ] **Step 2: Run the type checker**
 
