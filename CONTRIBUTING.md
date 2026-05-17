@@ -52,8 +52,10 @@ Until then, use `workflow_dispatch` with `dry_run=true` to rehearse.
 
 ### Action pinning policy
 
-The PyPI publish action (`pypa/gh-action-pypi-publish`) is pinned to a full
-commit SHA (with a `# vX.Y.Z` comment so Dependabot still bumps it) because it
-receives the OIDC publish token. All other GitHub Actions are tag-pinned and
-kept current by Dependabot (`github-actions` ecosystem); `zizmor`'s
-`unpinned-uses` policy enforces at least ref-pinning repo-wide.
+**Every** GitHub Action is pinned to a full 40-hex commit SHA with a trailing
+`# vX.Y.Z` comment (so Dependabot still proposes version bumps). `zizmor`'s
+`unpinned-uses` policy enforces `hash-pin` repo-wide in CI, so an unpinned or
+tag-pinned action fails the build. Dependabot (`github-actions` ecosystem,
+weekly, with a ≥7-day release cooldown) keeps these SHAs current. When adding
+or bumping an action, resolve the tag to its commit SHA and keep the
+`# vX.Y.Z` comment matching that SHA — do not use a bare tag.
