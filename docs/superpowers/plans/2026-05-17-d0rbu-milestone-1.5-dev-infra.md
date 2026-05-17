@@ -1218,7 +1218,7 @@ Expected: all jobs eventually succeed. If a job fails, read the log (`gh run vie
     "@types/node": "^25.8.0",
     "tsup": "8.3.5",
     "typescript": "5.7.2",
-    "vitest": "2.1.8"
+    "vitest": "2.1.9"
   }
 }
 ```
@@ -1386,6 +1386,7 @@ Insert this job under `jobs:` (sibling of `quality`, before `pr-title`):
           cache: npm
           cache-dependency-path: packages/npm/package-lock.json
       - run: npm ci
+      - run: npm audit --audit-level=high
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
@@ -1865,6 +1866,8 @@ git push
 **Files:** README.md (status accuracy), CONTRIBUTING.md (action-pinning policy), plan doc (this note); then verification + PR state
 
 *Applied two polish fixes carried from review: (1) README status updated to "Milestones 1–1.5"; (2) CONTRIBUTING action-pinning-policy subsection added.*
+
+*(Post-final-review: bumped vitest 2.1.8→2.1.9 for GHSA-9crc-q9x8-hgqq; added npm audit --audit-level=high CI gate.)*
 
 - [ ] **Step 1: Confirm full green on the PR**
 
