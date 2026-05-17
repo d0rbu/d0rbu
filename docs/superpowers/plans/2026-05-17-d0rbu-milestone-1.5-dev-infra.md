@@ -1661,12 +1661,15 @@ concurrency:
 
 jobs:
   guard:
+    name: check for web/ site
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       has_site: ${{ steps.check.outputs.has_site }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - id: check
         run: |
           if [ -f web/package.json ] || [ -f web/index.html ]; then
@@ -1677,18 +1680,21 @@ jobs:
           fi
 
   deploy:
+    name: build and deploy site
     needs: guard
     if: needs.guard.outputs.has_site == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      pages: write
-      id-token: write
+      pages: write      # publish the built site to GitHub Pages
+      id-token: write   # OIDC for GitHub Pages deployment
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -1701,6 +1707,8 @@ jobs:
       - id: deploy
         uses: actions/deploy-pages@v4
 ```
+
+(Hardened for zizmor pedantic: job names added (anonymous-definition); persist-credentials:false on both checkouts; documented pages/id-token perms.)
 
 - [ ] **Step 2: Create `.github/dependabot.yml`**
 
