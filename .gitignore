@@ -11,8 +11,6 @@ dist/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
-# uv lockfile — not committed for a registry-published package
-uv.lock
 
 # Node
 node_modules/
