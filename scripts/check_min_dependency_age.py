@@ -1,32 +1,51 @@
 #!/usr/bin/env python3
-"""Rolling minimum-dependency-age guard (uv.lock + npm package-lock.json).
+"""Rolling minimum age guard for *newly added/upgraded* deps (uv + npm).
 
 Neither ``uv`` nor ``npm`` has a *rolling* minimum-release-age setting at the
-lockfile layer (Dependabot's ``cooldown`` only gates *its* PRs, not arbitrary
-manual/Dependabot lock bumps once merged). This script provides that missing
-rolling guard: a dependency version pinned in a lock file must have been
-published at least ``MIN_AGE_DAYS`` (default 7) ago.
+lockfile layer (Dependabot's ``cooldown`` only gates *its own* PRs, not
+arbitrary manual/Dependabot lock bumps once merged). This script provides that
+missing guard with the same semantics as Dependabot ``cooldown``: a dependency
+whose pinned ``(name, version)`` is **newly added or version-changed** versus a
+baseline lockfile must have been published at least ``MIN_AGE_DAYS`` (default
+7) ago. Dependencies **unchanged** from the baseline are grandfathered -- the
+already-committed, already-vetted lock is the trusted baseline; the
+supply-chain threat is a *new or upgraded* fresh version entering, not a pin
+that was already there.
+
+Baseline
+--------
+The baseline is the lockfile content at ``--base-ref`` (default
+``origin/main``), read with ``git show <base-ref>:<path>``. If that path does
+**not** exist at the base ref (e.g. the very first PR that introduces the
+lockfiles -- ``main`` has no committed ``uv.lock`` yet), the run is
+*baseline-establishing*: the current pins become the accepted baseline, so
+there are **no violations** (exit 0). The young deps are still printed on a
+clear INFO line so they are visible. A ``git show`` that fails for any reason
+(unknown ref, no fetched ``origin/main`` in a pre-commit run, ...) is treated
+as "baseline absent -> establishing -> pass", never a crash.
 
 Design notes
 ------------
 * **Stdlib only**, and must run under Python 3.10 -- so ``tomllib`` (3.11+)
   is intentionally NOT used; ``uv.lock`` is parsed with a small, robust
   ``[[package]]``-block scanner instead of a TOML library.
-* Pure, side-effect-free functions with injectable ``now`` / fetcher / IO so
-  the behaviour is deterministic and unit-testable without a real network.
+* Pure, side-effect-free functions with injectable ``now`` / fetcher / git
+  runner so the behaviour is deterministic and unit-testable without a real
+  network and without touching the real repository.
 
 Policy
 ------
 * **uv**: ``uv.lock`` records an ``upload-time`` for every registry package,
-  so the age check is always positively decidable *offline*. A package newer
-  than ``min_age`` is a hard **violation**. The root/editable project (no
-  ``upload-time``) is skipped.
-* **npm**: ``package-lock.json`` has no timestamps, so the publish time is
-  fetched from the npm registry. A package positively newer than ``min_age``
-  is a **violation**. If the lookup fails (network/registry/parse error) it
-  is reported as a **warning**, not a violation -- a deliberate, documented
+  so the age of a candidate is always positively decidable *offline*. A
+  candidate (added/changed pin) newer than ``min_age`` is a hard
+  **violation**. The root/editable project (no ``upload-time``) is skipped.
+* **npm**: ``package-lock.json`` has no timestamps, so the publish time of a
+  *candidate* is fetched from the npm registry. Pins unchanged from the
+  baseline are trusted without a lookup. A candidate positively newer than
+  ``min_age`` is a **violation**. If the lookup fails (network/registry/parse
+  error) it is a **warning**, not a violation -- a deliberate, documented
   fail-open so a flaky registry does not break CI. A *confirmed* too-fresh
-  package is never silently passed.
+  candidate is never silently passed.
 
 This file lives outside the ``henry_castillo`` package on purpose, so it is
 not measured by the package's 100% coverage gate.
@@ -36,6 +55,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -49,16 +69,34 @@ MIN_AGE_DAYS = 7
 NPM_REGISTRY = "https://registry.npmjs.org"
 DEFAULT_UV_LOCK = "uv.lock"
 DEFAULT_NPM_LOCK = "packages/npm/package-lock.json"
+DEFAULT_BASE_REF = "origin/main"
 
 UvPackage = tuple[str, str, "datetime | None"]
 NpmPackage = tuple[str, str]
+PinSet = set[tuple[str, str]]
 Opener = Callable[..., Any]
 NpmFetcher = Callable[..., "datetime | None"]
+GitRunner = Callable[[str, str], str]
+
+
+class BaselineUnavailable(Exception):  # noqa: N818 - domain name, not an error condition
+    """The baseline lockfile could not be read at the base ref.
+
+    Raised by the git runner when ``git show <ref>:<path>`` fails (unknown
+    ref/path, no fetched ``origin/main`` in a bare pre-commit run, ...).
+    ``load_baseline`` maps this to ``None`` == *baseline-establishing*, so the
+    guard passes instead of crashing.
+    """
 
 
 @dataclass(frozen=True)
 class Violation:
-    """A dependency confirmed to be younger than the minimum age."""
+    """A dependency that is younger than the minimum age.
+
+    Used both for hard violations (a *candidate* -- added/changed vs baseline
+    -- that is too fresh) and for the informational "grandfathered young"
+    list surfaced for visibility on an establishing/unchanged run.
+    """
 
     ecosystem: str
     name: str
@@ -191,6 +229,58 @@ def parse_npm_lock(json_obj: dict[str, Any]) -> list[NpmPackage]:
 
 
 # ---------------------------------------------------------------------------
+# Baseline (git-isolated, injectable runner)
+# ---------------------------------------------------------------------------
+
+
+def _git_show(base_ref: str, path: str) -> str:
+    """Return the text of ``path`` at ``base_ref`` via ``git show``.
+
+    Raises :class:`BaselineUnavailable` if git exits non-zero (unknown
+    ref/path, shallow clone without the ref, ...) or git is unavailable, so
+    callers can treat a missing baseline as *establishing* rather than crash.
+    """
+    try:
+        out = subprocess.check_output(  # noqa: S603 - fixed argv, no shell, trusted inputs
+            ["git", "show", f"{base_ref}:{path}"],  # noqa: S607 - `git` resolved from PATH by design
+            stderr=subprocess.DEVNULL,
+        )
+    except (subprocess.CalledProcessError, OSError) as exc:
+        raise BaselineUnavailable(f"git show {base_ref}:{path} failed: {exc}") from exc
+    return out.decode("utf-8", errors="replace")
+
+
+def load_baseline(
+    base_ref: str,
+    path: str,
+    *,
+    kind: str,
+    runner: GitRunner = _git_show,
+) -> PinSet | None:
+    """Return the baseline ``{(name, version)}`` set, or ``None``.
+
+    ``None`` means the lockfile does not exist at ``base_ref`` (the runner
+    raised :class:`BaselineUnavailable`) -> the run is *baseline-establishing*.
+    A present-but-unparseable lock yields an **empty set** (distinct from
+    ``None``): the lock existed at the base ref so every current pin still
+    counts as "added" and is a candidate for the age check.
+    """
+    try:
+        content = runner(base_ref, path)
+    except BaselineUnavailable:
+        return None
+    if kind == "uv":
+        return {(name, version) for name, version, _ in parse_uv_lock(content)}
+    try:
+        obj = json.loads(content)
+    except ValueError:
+        return set()
+    if not isinstance(obj, dict):
+        return set()
+    return set(parse_npm_lock(obj))
+
+
+# ---------------------------------------------------------------------------
 # npm registry lookup
 # ---------------------------------------------------------------------------
 
@@ -236,25 +326,52 @@ def find_violations(
     now: datetime,
     min_age: timedelta,
     npm_published_at: NpmFetcher = npm_published_at,
-) -> tuple[list[Violation], list[str]]:
-    """Classify lock entries into hard violations and (npm-only) warnings.
+    uv_baseline: PinSet | None,
+    npm_baseline: PinSet | None,
+) -> tuple[list[Violation], list[str], list[Violation]]:
+    """Classify lock entries with delta/baseline (Dependabot-cooldown) rules.
 
-    * uv: ``upload_time`` present and ``now - upload_time < min_age`` -> a
-      hard violation. Missing ``upload_time`` (root/path dep) is ignored.
-    * npm: a positively-too-fresh package is a violation; a failed lookup is
-      a fail-open warning (transient registry errors must not break CI).
+    A pin is a *candidate* only if it is **not** in the baseline set (added or
+    version-changed) -- unless the baseline is ``None`` (establishing), in
+    which case every pin is grandfathered and nothing is a violation.
+
+    Returns ``(violations, warnings, grandfathered_young)``:
+
+    * ``violations`` -- hard failures: candidates younger than ``min_age``
+      (uv from the embedded ``upload-time``; npm via the registry).
+    * ``warnings`` -- npm candidates whose registry lookup failed (fail-open;
+      never blocks CI on a transient/registry error).
+    * ``grandfathered_young`` -- deps younger than ``min_age`` that are
+      *accepted* anyway (establishing run, or unchanged from baseline with a
+      known publish time) -- surfaced purely for visibility.
+
+    uv pins without an ``upload-time`` (root/path dep) are always ignored.
+    Unchanged-from-baseline npm pins are trusted without a registry lookup.
     """
     violations: list[Violation] = []
     warnings: list[str] = []
+    grandfathered: list[Violation] = []
 
+    uv_establishing = uv_baseline is None
     for name, version, uploaded in uv_pkgs:
         if uploaded is None:
             continue
         age = now - uploaded
-        if age < min_age:
-            violations.append(Violation("uv", name, version, uploaded, age))
+        if age >= min_age:
+            continue
+        is_candidate = not uv_establishing and (name, version) not in uv_baseline
+        record = Violation("uv", name, version, uploaded, age)
+        if is_candidate:
+            violations.append(record)
+        else:
+            grandfathered.append(record)
 
+    npm_establishing = npm_baseline is None
     for name, version in npm_pkgs:
+        unchanged = not npm_establishing and (name, version) in npm_baseline
+        if unchanged:
+            # Trusted baseline pin: no registry call, no surfacing.
+            continue
         published = npm_published_at(name, version)
         if published is None:
             warnings.append(
@@ -263,10 +380,15 @@ def find_violations(
             )
             continue
         age = now - published
-        if age < min_age:
-            violations.append(Violation("npm", name, version, published, age))
+        if age >= min_age:
+            continue
+        record = Violation("npm", name, version, published, age)
+        if npm_establishing:
+            grandfathered.append(record)
+        else:
+            violations.append(record)
 
-    return violations, warnings
+    return violations, warnings, grandfathered
 
 
 # ---------------------------------------------------------------------------
@@ -296,13 +418,25 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="check_min_dependency_age",
         description=(
-            "Fail if any locked dependency was published less than "
-            "--min-age-days ago (rolling guard uv/npm lack natively)."
+            "Fail if a NEWLY ADDED or version-changed locked dependency "
+            "(vs --base-ref) was published less than --min-age-days ago. "
+            "Rolling cooldown that uv/npm lack natively; matches Dependabot "
+            "cooldown. The first PR that introduces the lockfiles is "
+            "baseline-establishing and always passes."
         ),
     )
     parser.add_argument("--uv-lock", default=DEFAULT_UV_LOCK)
     parser.add_argument("--npm-lock", default=DEFAULT_NPM_LOCK)
     parser.add_argument("--min-age-days", type=int, default=MIN_AGE_DAYS)
+    parser.add_argument(
+        "--base-ref",
+        default=DEFAULT_BASE_REF,
+        help=(
+            "Git ref whose lockfiles are the trusted baseline "
+            f"(default {DEFAULT_BASE_REF!r}). If a lock is absent there the "
+            "run is baseline-establishing and passes."
+        ),
+    )
     parser.add_argument(
         "--skip-npm",
         action="store_true",
@@ -317,33 +451,63 @@ def main(argv: list[str] | None = None) -> int:
     now = datetime.now(timezone.utc)
 
     uv_pkgs = _load_uv(Path(args.uv_lock))
+    uv_baseline = load_baseline(args.base_ref, args.uv_lock, kind="uv")
+
     npm_pkgs: list[NpmPackage] = []
+    npm_baseline: PinSet | None = None
     if not args.skip_npm:
         npm_pkgs = _load_npm(Path(args.npm_lock))
+        npm_baseline = load_baseline(args.base_ref, args.npm_lock, kind="npm")
 
-    violations, warnings = find_violations(
+    violations, warnings, grandfathered = find_violations(
         uv_pkgs,
         npm_pkgs,
         now=now,
         min_age=min_age,
         npm_published_at=npm_published_at,
+        uv_baseline=uv_baseline,
+        npm_baseline=npm_baseline,
     )
 
     for warning in warnings:
         print(f"warning: {warning}")
 
+    uv_establishing = uv_baseline is None
+    npm_establishing = (not args.skip_npm) and npm_baseline is None
+    establishing = uv_establishing or npm_establishing
+    if grandfathered:
+        if establishing:
+            print(
+                f"INFO: baseline-establishing run vs {args.base_ref!r} "
+                f"(no committed lock at base) -- "
+                f"{len(grandfathered)} young dependenc"
+                f"{'y' if len(grandfathered) == 1 else 'ies'} grandfathered "
+                f"as the accepted baseline:"
+            )
+        else:
+            print(
+                f"INFO: {len(grandfathered)} young dependenc"
+                f"{'y' if len(grandfathered) == 1 else 'ies'} unchanged from "
+                f"{args.base_ref!r} baseline -- grandfathered:"
+            )
+        for record in grandfathered:
+            print(f"  {record.render(min_age)}")
+
     if not violations:
         scope = "uv" if args.skip_npm else "uv + npm"
+        mode = "establishing" if establishing else "delta vs " + args.base_ref
         print(
-            f"OK: no dependency younger than {args.min_age_days}d "
-            f"({scope}; {len(uv_pkgs)} uv, {len(npm_pkgs)} npm checked)."
+            f"OK: no newly added/upgraded dependency younger than "
+            f"{args.min_age_days}d ({scope}; {mode}; "
+            f"{len(uv_pkgs)} uv, {len(npm_pkgs)} npm checked)."
         )
         return 0
 
     print(
-        f"FAIL: {len(violations)} dependenc"
+        f"FAIL: {len(violations)} newly added/upgraded dependenc"
         f"{'y' if len(violations) == 1 else 'ies'} younger than "
-        f"{args.min_age_days}d (minimum dependency age):"
+        f"{args.min_age_days}d (minimum dependency age vs "
+        f"{args.base_ref!r}):"
     )
     for violation in violations:
         print(f"  {violation.render(min_age)}")
