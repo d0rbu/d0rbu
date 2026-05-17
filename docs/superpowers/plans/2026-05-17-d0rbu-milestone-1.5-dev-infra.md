@@ -1408,8 +1408,10 @@ permissions:
   contents: read
 
 concurrency:
+  # Never cancel an in-flight CodeQL run: a cancelled security scan leaves
+  # GitHub without fresh SARIF results. Queue instead of cancel.
   group: codeql-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   analyze:
