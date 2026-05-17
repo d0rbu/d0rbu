@@ -78,7 +78,7 @@ root = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --strict-markers --strict-config --cov=henry_castillo --cov-report=term-missing --cov-report=xml --cov-fail-under=90"
+addopts = "-q --strict-markers --strict-config --cov=henry_castillo --cov-report=term-missing --cov-report=xml --cov-fail-under=100"
 
 [tool.coverage.run]
 branch = true
