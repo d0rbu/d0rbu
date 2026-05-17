@@ -91,3 +91,4 @@ def test_maybe_notice_no_update_available(monkeypatch, capsys):
     assert rc == 0
     # No update notice should appear beyond the standard banner lines
     assert "henry-castillo" in out
+    assert "new release" not in out.lower()

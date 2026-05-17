@@ -37,7 +37,8 @@ def test_fetch_latest_version_returns_none_on_error(monkeypatch):
     assert update.fetch_latest_version(url="https://example/x") is None
 
 
-def test_check_for_update_uses_cache_and_throttles(tmp_path: Path):
+def test_check_for_update_uses_cache_and_throttles(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(update, "current_version", lambda: "0.0.0")
     cache = tmp_path / "u.json"
     calls = []
 
@@ -151,3 +152,29 @@ def test_perform_update_falls_back_to_pip(monkeypatch):
     assert "pip" in " ".join(commands_called[0])
     assert "install" in commands_called[0]
     assert "--upgrade" in commands_called[0]
+
+
+def test_check_for_update_throttles_after_failed_fetch(tmp_path, monkeypatch):
+    monkeypatch.setattr(update, "current_version", lambda: "0.0.0")
+    cache = tmp_path / "u.json"
+    calls = []
+
+    def failing_fetcher():
+        calls.append(1)
+
+    # First call: fetch attempted, fails -> must still record last_check
+    assert (
+        update.check_for_update(
+            now=1000.0, cache_path=cache, interval=100, fetcher=failing_fetcher
+        )
+        is None
+    )
+    assert len(calls) == 1
+    # Second call within interval: must NOT re-fetch (throttled despite failure)
+    assert (
+        update.check_for_update(
+            now=1050.0, cache_path=cache, interval=100, fetcher=failing_fetcher
+        )
+        is None
+    )
+    assert len(calls) == 1

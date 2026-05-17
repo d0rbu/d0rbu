@@ -643,7 +643,10 @@ def check_for_update(
         fetched = fetcher()
         if fetched is not None:
             latest = fetched
-            _write_cache(path, {"last_check": now, "latest": latest})
+        # Advance the throttle even on a failed fetch so an offline machine
+        # does not pay the network timeout on every run; preserve any
+        # previously cached `latest`.
+        _write_cache(path, {"last_check": now, "latest": latest})
     if latest and is_outdated(current_version(), latest):
         return latest
     return None
