@@ -468,6 +468,27 @@ def _load_npm(path: Path) -> list[NpmPackage]:
     return parse_npm_lock(obj)
 
 
+def _min_age_days(value: str) -> int:
+    """argparse ``type`` for ``--min-age-days``: an int that is **>= 1**.
+
+    A security control must not silently no-op: ``0`` or a negative value
+    would make ``timedelta(days=N)`` non-positive so *every* dependency is
+    "old enough" and the guard passes everything. Reject it loudly instead.
+    """
+    try:
+        days = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"--min-age-days must be an integer >= 1, got {value!r}"
+        ) from None
+    if days < 1:
+        raise argparse.ArgumentTypeError(
+            f"--min-age-days must be at least 1 (>= 1); got {days} "
+            f"(0 or negative would disable the dependency-age guard)"
+        )
+    return days
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="check_min_dependency_age",
@@ -481,7 +502,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--uv-lock", default=DEFAULT_UV_LOCK)
     parser.add_argument("--npm-lock", default=DEFAULT_NPM_LOCK)
-    parser.add_argument("--min-age-days", type=int, default=MIN_AGE_DAYS)
+    parser.add_argument("--min-age-days", type=_min_age_days, default=MIN_AGE_DAYS)
     parser.add_argument(
         "--base-ref",
         default=DEFAULT_BASE_REF,

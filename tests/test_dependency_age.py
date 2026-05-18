@@ -993,6 +993,56 @@ def test_main_min_age_days_is_honored(tmp_path, monkeypatch, capsys):
     assert "< 14d" in out
 
 
+# ---------------------------------------------------------------------------
+# --min-age-days validation: a security control must not silently no-op at
+# 0 or a negative value (min_age = timedelta(days=0) would make EVERYTHING
+# old enough -> every fresh dep silently passes).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "-7"])
+def test_main_min_age_days_below_one_is_rejected(bad, tmp_path, monkeypatch, capsys):
+    """``--min-age-days < 1`` must hard-fail (argparse error, exit code 2),
+    NOT silently disable the guard."""
+    monkeypatch.setattr(guard, "load_baseline", _baseline_absent)
+    uv_lock, npm_lock = _write_locks(tmp_path, UV_LOCK_SAMPLE, NPM_LOCK_SAMPLE)
+    with pytest.raises(SystemExit) as exc:
+        guard.main(
+            [
+                "--uv-lock",
+                str(uv_lock),
+                "--npm-lock",
+                str(npm_lock),
+                "--skip-npm",
+                "--min-age-days",
+                bad,
+            ]
+        )
+    assert exc.value.code != 0
+    err = capsys.readouterr().err
+    assert "min-age-days" in err
+    assert ">= 1" in err or "at least 1" in err
+
+
+def test_main_min_age_days_one_is_accepted(tmp_path, monkeypatch, capsys):
+    """The boundary value 1 is still valid (>= 1)."""
+    monkeypatch.setattr(guard, "load_baseline", _baseline_absent)
+    uv_lock, npm_lock = _write_locks(tmp_path, UV_LOCK_SAMPLE, NPM_LOCK_SAMPLE)
+    rc = guard.main(
+        [
+            "--uv-lock",
+            str(uv_lock),
+            "--npm-lock",
+            str(npm_lock),
+            "--skip-npm",
+            "--min-age-days",
+            "1",
+        ]
+    )
+    assert rc == 0
+    capsys.readouterr()
+
+
 def test_main_report_text_is_exact_for_added_uv_violation(
     tmp_path, monkeypatch, capsys
 ):
