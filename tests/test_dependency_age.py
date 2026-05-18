@@ -85,11 +85,12 @@ def test_parse_uv_lock_extracts_name_version_upload_time():
     pkgs = guard.parse_uv_lock(UV_LOCK_SAMPLE)
     by_name = {p[0]: p for p in pkgs}
 
-    # registry package with sdist upload-time
+    # registry package with sdist upload-time -> 4-tuple incl. source kind.
     assert by_name["annotated-doc"] == (
         "annotated-doc",
         "0.0.4",
         _dt(2020, 11, 10, 22, 7, 42, 62000),
+        "registry",
     )
 
 
@@ -101,19 +102,70 @@ def test_parse_uv_lock_tolerates_key_ordering_and_wheel_only():
         "click",
         "8.4.0",
         _dt(2021, 5, 17, 0, 47, 56, 842000),
+        "registry",
     )
 
 
 def test_parse_uv_lock_root_editable_has_no_upload_time():
-    """The root/editable project (no upload-time) yields None for time."""
+    """The root/editable project (no upload-time) yields None for time and
+    an ``editable`` source kind (NOT a registry package)."""
     pkgs = guard.parse_uv_lock(UV_LOCK_SAMPLE)
     by_name = {p[0]: p for p in pkgs}
     assert "henry-castillo" in by_name
     assert by_name["henry-castillo"][2] is None
+    assert by_name["henry-castillo"][3] == "editable"
 
 
 def test_parse_uv_lock_empty_text_returns_empty_list():
     assert guard.parse_uv_lock("") == []
+
+
+@pytest.mark.parametrize(
+    "sep",
+    [
+        "\x0b",  # VT
+        "\x0c",  # FF
+        "\x1c",  # FS
+        "\x1d",  # GS
+        "\x1e",  # RS
+        "\x85",  # NEL
+        "\u2028",  # LINE SEPARATOR
+        "\u2029",  # PARAGRAPH SEPARATOR
+    ],
+)
+def test_parse_uv_lock_unicode_line_sep_does_not_fracture_value(sep):
+    """FIX 6 regression: a Unicode line separator embedded in a quoted value
+    must NOT fracture the ``key = "..."`` line.
+
+    ``str.splitlines()`` splits on ``\\x0b\\x0c\\x1c\\x1d\\x1e\\x85\\u2028
+    \\u2029`` (and more) -- but TOML newlines are ONLY ``\\n``/``\\r\\n``. A
+    crafted ``version`` value containing such a code point would, under
+    ``splitlines()``, break the quoted string across two pseudo-lines so
+    ``_scalar`` sees an unterminated quote -> the package is dropped or its
+    version truncated (which, post-FIX-2, could let a tampered fresh pin slip
+    past the age check by mis-identifying its version). With
+    ``replace("\\r\\n","\\n").split("\\n")`` the value stays intact.
+    """
+    version_value = f"1.{sep}0.0"
+    block = (
+        "version = 1\n"
+        "\n"
+        "[[package]]\n"
+        'name = "evil"\n'
+        f'version = "{version_value}"\n'
+        'source = { registry = "https://pypi.org/simple" }\n'
+        'sdist = { url = "https://e/e.tgz", '
+        'upload-time = "2020-01-01T00:00:00Z" }\n'
+    )
+    pkgs = guard.parse_uv_lock(block)
+    by_name = {p[0]: p for p in pkgs}
+    assert "evil" in by_name, f"package dropped when value held {sep!r}"
+    _name, version, upload, source_kind = by_name["evil"]
+    assert version == version_value, (
+        f"version truncated/fractured by {sep!r}: got {version!r}"
+    )
+    assert upload == _dt(2020, 1, 1, 0, 0, 0)
+    assert source_kind == "registry"
 
 
 # ---------------------------------------------------------------------------
@@ -150,25 +202,105 @@ NPM_LOCK_SAMPLE = {
             "version": "1.0.0",
             "resolved": "file:../tarballs/file-dep-1.0.0.tgz",
         },
-        "node_modules/no-resolved": {
-            "version": "9.9.9",
-        },
     },
 }
 
 
+def _npm_names_kinds(pkgs):
+    """Reduce parse_npm_lock 4-tuples to ``{name: kind}`` for assertions."""
+    return {name: kind for name, _v, _r, kind in pkgs}
+
+
 def test_parse_npm_lock_returns_only_registry_deps():
+    """Genuine registry deps come back tagged ``registry`` with their
+    ``resolved``; ``link:`` and ``file:`` entries are excluded entirely."""
     pkgs = guard.parse_npm_lock(NPM_LOCK_SAMPLE)
-    assert sorted(pkgs) == sorted(
-        [
-            ("typescript", "5.7.2"),
-            ("@types/node", "25.8.0"),
-        ]
+    by_name = {name: (name, v, r, kind) for name, v, r, kind in pkgs}
+    assert set(by_name) == {"typescript", "@types/node"}
+    assert by_name["typescript"] == (
+        "typescript",
+        "5.7.2",
+        "https://registry.npmjs.org/typescript/-/typescript-5.7.2.tgz",
+        "registry",
+    )
+    assert by_name["@types/node"] == (
+        "@types/node",
+        "25.8.0",
+        "https://registry.npmjs.org/@types/node/-/node-25.8.0.tgz",
+        "registry",
     )
 
 
 def test_parse_npm_lock_missing_packages_key_returns_empty():
     assert guard.parse_npm_lock({}) == []
+
+
+# ---------------------------------------------------------------------------
+# FIX 2 (npm): a registry-shaped candidate whose `resolved` was scrubbed must
+# NOT be silently dropped -- it is tagged ``unverifiable`` so find_violations
+# fails closed. Genuine non-registry forms stay excluded.
+# ---------------------------------------------------------------------------
+
+
+def test_parse_npm_lock_scrubbed_resolved_is_tagged_unverifiable():
+    """A concrete-semver entry that is NOT link/file/git/workspace but has
+    its ``resolved`` stripped is returned tagged ``unverifiable`` (fail
+    closed), NOT dropped."""
+    obj = {
+        "packages": {
+            "": {"name": "root", "version": "0.0.0"},
+            "node_modules/evil": {"version": "6.6.6", "integrity": "sha512-z"},
+        }
+    }
+    pkgs = guard.parse_npm_lock(obj)
+    assert pkgs == [("evil", "6.6.6", None, "unverifiable")]
+
+
+def test_parse_npm_lock_non_http_resolved_is_unverifiable():
+    """A concrete-semver entry whose ``resolved`` is a non-``http(s)`` URL
+    (scheme present but not http/https, e.g. ``ftp://``) is registry-shaped
+    yet unverifiable -> tagged, not dropped."""
+    obj = {
+        "packages": {
+            "node_modules/sneaky": {
+                "version": "1.2.3",
+                "resolved": "ftp://evil.example/sneaky-1.2.3.tgz",
+            }
+        }
+    }
+    pkgs = guard.parse_npm_lock(obj)
+    assert pkgs == [
+        ("sneaky", "1.2.3", "ftp://evil.example/sneaky-1.2.3.tgz", "unverifiable")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("meta", "why"),
+    [
+        ({"resolved": "link:../x", "link": True}, "link:true workspace"),
+        ({"version": "1.0.0", "resolved": "file:../x-1.0.0.tgz"}, "file: tarball"),
+        (
+            {"version": "1.0.0", "resolved": "git+https://h/x.git#abc"},
+            "git+ vcs dep",
+        ),
+        ({"version": "1.0.0", "resolved": "git://h/x.git"}, "git: vcs dep"),
+        ({"version": "1.0.0", "resolved": "../packages/x"}, "workspace path"),
+        ({"resolved": "https://r/x.tgz"}, "no version (alias/meta)"),
+        ({"version": "not-semver", "resolved": "https://r/x.tgz"}, "non-semver"),
+    ],
+)
+def test_parse_npm_lock_genuine_non_registry_forms_excluded(meta, why):
+    """Genuine non-registry forms are excluded entirely (NOT tagged
+    unverifiable) so a legitimate workspace/vcs/file lock is never
+    false-flagged by the fail-closed rule."""
+    obj = {"packages": {"node_modules/x": meta}}
+    assert guard.parse_npm_lock(obj) == [], f"should be excluded: {why}"
+
+
+def test_parse_npm_lock_root_entry_never_returned():
+    """The root ``""`` entry is never returned, even with a version."""
+    obj = {"packages": {"": {"version": "1.2.3", "resolved": "https://r/x"}}}
+    assert guard.parse_npm_lock(obj) == []
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +326,39 @@ def test_iso_to_dt_z_equals_explicit_offset():
     assert guard.iso_to_dt("2026-01-02T03:04:05Z") == guard.iso_to_dt(
         "2026-01-02T03:04:05+00:00"
     )
+
+
+@pytest.mark.parametrize("bad", [None, 123, 1.5, [1], {"a": 1}, True])
+def test_iso_to_dt_non_string_raises_value_error_not_attribute_error(bad):
+    """FIX 3 regression: a non-string timestamp must raise ``ValueError``
+    (the documented clean failure every caller absorbs), NOT ``AttributeError``.
+
+    A registry/lock returning ``time[version]`` as null/number/list/object
+    previously hit ``s.strip()`` on a non-str and raised ``AttributeError``,
+    which is NOT in ``npm_published_at``'s / ``_first_upload_time``'s except
+    tuple -> the CI guard crashed instead of degrading to a clean
+    None/warning (and, for a uv candidate, instead of becoming a violation).
+    """
+    with pytest.raises(ValueError, match="expected ISO 8601 timestamp string"):
+        guard.iso_to_dt(bad)
+
+
+def test_iso_to_dt_value_error_message_names_the_type():
+    """The ValueError must name the offending type for debuggability."""
+    with pytest.raises(ValueError, match="got NoneType"):
+        guard.iso_to_dt(None)
+    with pytest.raises(ValueError, match="got int"):
+        guard.iso_to_dt(123)
+
+
+def test_iso_to_dt_callers_absorb_value_error_consistently():
+    """Every ``iso_to_dt`` caller already catches ``ValueError`` -> a
+    malformed/odd registry or lock timestamp degrades to None/warning
+    consistently (and, for a uv candidate, FIX 2 turns the resulting
+    ``upload_time is None`` into a violation -- never a silent skip)."""
+    # _first_upload_time absorbs it (-> None upload time).
+    block = '\nname = "x"\nversion = "1.0.0"\nupload-time = 12345\n'
+    assert guard._first_upload_time(block) is None
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +396,7 @@ def _no_npm(name, version):  # pragma: no cover - injected, never called here
 )
 def test_find_violations_uv_age_for_added_dep(uploaded, expect_violation):
     """An added dep (not in baseline) younger than min_age is a violation."""
-    uv_pkgs = [("freshpkg", "1.0.0", uploaded)]
+    uv_pkgs = [("freshpkg", "1.0.0", uploaded, "registry")]
     violations, warnings, grandfathered = guard.find_violations(
         uv_pkgs,
         [],
@@ -254,7 +419,7 @@ def test_find_violations_uv_age_for_added_dep(uploaded, expect_violation):
 def test_find_violations_uv_unchanged_from_baseline_is_grandfathered():
     """A young dep with the SAME (name, version) as baseline is NOT a
     violation -- it is grandfathered (and surfaced for visibility)."""
-    uv_pkgs = [("vetted", "1.0.0", NOW - timedelta(days=1))]
+    uv_pkgs = [("vetted", "1.0.0", NOW - timedelta(days=1), "registry")]
     violations, warnings, grandfathered = guard.find_violations(
         uv_pkgs,
         [],
@@ -274,7 +439,7 @@ def test_find_violations_uv_unchanged_from_baseline_is_grandfathered():
 def test_find_violations_uv_baseline_none_is_establishing():
     """baseline=None (lock absent at base ref) -> establishing: even a very
     young added dep is grandfathered, never a violation."""
-    uv_pkgs = [("brandnew", "0.1.0", NOW - timedelta(hours=1))]
+    uv_pkgs = [("brandnew", "0.1.0", NOW - timedelta(hours=1), "registry")]
     violations, warnings, grandfathered = guard.find_violations(
         uv_pkgs,
         [],
@@ -302,7 +467,7 @@ def test_find_violations_uv_baseline_none_is_establishing():
 def test_find_violations_uv_version_change(
     old_ver, new_ver, uploaded, expect_violation
 ):
-    uv_pkgs = [("changing", new_ver, uploaded)]
+    uv_pkgs = [("changing", new_ver, uploaded, "registry")]
     violations, warnings, grandfathered = guard.find_violations(
         uv_pkgs,
         [],
@@ -319,14 +484,19 @@ def test_find_violations_uv_version_change(
         assert grandfathered == []
 
 
-def test_find_violations_uv_no_upload_time_is_ignored():
-    """Root/path dep without an upload-time is never a violation."""
+@pytest.mark.parametrize("kind", [None, "editable", "virtual", "directory", "git"])
+def test_find_violations_uv_non_registry_no_upload_time_is_ignored(kind):
+    """A non-registry source (root/editable/virtual/directory/git) without an
+    upload-time is never a violation -- even as a candidate -- because it is
+    not subject to the registry-age policy at all."""
     violations, warnings, grandfathered = guard.find_violations(
-        [("henry-castillo", "0.0.0", None)],
+        [("henry-castillo", "0.0.0", None, kind)],
         [],
         now=NOW,
         min_age=MIN_AGE,
         npm_published_at=_no_npm,
+        # Empty baseline => this pin is "added" (a candidate); it must STILL
+        # be ignored because it is not a registry source.
         uv_baseline=EMPTY_BASE,
         npm_baseline=EMPTY_BASE,
     )
@@ -348,7 +518,7 @@ def test_find_violations_uv_no_upload_time_is_ignored():
 )
 def test_find_violations_uv_boundary_is_pinned(delta, expect_violation):
     """The 7-day boundary for a newly added dep is exact and inclusive."""
-    uv_pkgs = [("boundary", "2.0.0", NOW - delta)]
+    uv_pkgs = [("boundary", "2.0.0", NOW - delta, "registry")]
     violations, _, _ = guard.find_violations(
         uv_pkgs,
         [],
@@ -359,6 +529,211 @@ def test_find_violations_uv_boundary_is_pinned(delta, expect_violation):
         npm_baseline=EMPTY_BASE,
     )
     assert (len(violations) == 1) is expect_violation
+
+
+# ---------------------------------------------------------------------------
+# FIX 2 (HIGH): the dependency-age guard must FAIL CLOSED for an unverifiable
+# *registry* candidate (a tampered lock that stripped upload-time/resolved
+# off a malicious added dep must NOT bypass the guard), WITHOUT
+# false-flagging legitimate non-registry (editable/virtual/git/...) entries.
+# ---------------------------------------------------------------------------
+
+
+def test_find_violations_uv_registry_candidate_missing_upload_time_is_violation():
+    """A registry-source CANDIDATE with NO upload-time is a hard violation
+    (fail closed) -- not silently skipped as before.
+
+    Old behavior: ``if uploaded is None: continue`` dropped it -> a
+    hand-tampered lock that scrubbed ``upload-time`` off a fresh malicious
+    added dep bypassed the guard entirely.
+    """
+    violations, warnings, grandfathered = guard.find_violations(
+        [("evilpkg", "6.6.6", None, "registry")],
+        [],
+        now=NOW,
+        min_age=MIN_AGE,
+        npm_published_at=_no_npm,
+        uv_baseline=EMPTY_BASE,  # not in baseline => candidate
+        npm_baseline=EMPTY_BASE,
+    )
+    assert warnings == []
+    assert grandfathered == []
+    assert len(violations) == 1
+    v = violations[0]
+    assert isinstance(v, guard.Unverifiable)
+    assert v.ecosystem == "uv"
+    assert v.name == "evilpkg"
+    assert v.version == "6.6.6"
+    rendered = v.render(MIN_AGE)
+    assert "cannot verify age" in rendered
+    assert "missing/invalid upload-time" in rendered
+    assert "evilpkg==6.6.6" in rendered
+
+
+def test_find_violations_uv_malformed_upload_time_is_violation():
+    """A registry candidate whose ``upload-time`` is unparseable (parse ->
+    None via FIX 3's ValueError absorbed by ``_first_upload_time``) is the
+    SAME fail-closed violation as a missing one -- coherent with FIX 3."""
+    # _first_upload_time returns None for a non-timestamp value, so the
+    # find_violations input mirrors that (uploaded is None) but the package
+    # IS a registry source -> violation, not skip.
+    bad_block = (
+        "\n[[package]]\n"
+        'name = "badts"\n'
+        'version = "1.0.0"\n'
+        'source = { registry = "https://pypi.org/simple" }\n'
+        'sdist = { url = "https://e/b.tgz", upload-time = "not-a-ts" }\n'
+    )
+    parsed = guard.parse_uv_lock("version=1\n" + bad_block)
+    assert parsed == [("badts", "1.0.0", None, "registry")]
+    violations, _, _ = guard.find_violations(
+        parsed,
+        [],
+        now=NOW,
+        min_age=MIN_AGE,
+        npm_published_at=_no_npm,
+        uv_baseline=EMPTY_BASE,
+        npm_baseline=EMPTY_BASE,
+    )
+    assert len(violations) == 1
+    assert isinstance(violations[0], guard.Unverifiable)
+    assert violations[0].name == "badts"
+
+
+def test_parse_uv_lock_upload_time_typo_key_yields_none_time():
+    """A typo'd ``uploadtime``/``upload_time`` key (NOT the real
+    ``upload-time``) leaves the time unparsed (None) -> a registry candidate
+    with that typo is a FIX-2 violation, not a silent pass."""
+    block = (
+        "version=1\n"
+        "\n[[package]]\n"
+        'name = "typo"\n'
+        'version = "2.0.0"\n'
+        'source = { registry = "https://pypi.org/simple" }\n'
+        'sdist = { url = "https://e/t.tgz", uploadtime = "2020-01-01T00:00:00Z" }\n'
+    )
+    parsed = guard.parse_uv_lock(block)
+    assert parsed == [("typo", "2.0.0", None, "registry")]
+    violations, _, _ = guard.find_violations(
+        parsed,
+        [],
+        now=NOW,
+        min_age=MIN_AGE,
+        npm_published_at=_no_npm,
+        uv_baseline=EMPTY_BASE,
+        npm_baseline=EMPTY_BASE,
+    )
+    assert len(violations) == 1
+    assert isinstance(violations[0], guard.Unverifiable)
+
+
+@pytest.mark.parametrize("kind", [None, "editable", "virtual", "directory", "git"])
+def test_find_violations_uv_non_registry_candidate_missing_time_not_violation(kind):
+    """A NON-registry pkg (editable/virtual/directory/git/source-less) as a
+    *candidate* with no upload-time is NOT a violation -- it legitimately has
+    no registry publish time and is not subject to the age policy. This is
+    the no-false-positive half of fail-closed."""
+    violations, warnings, grandfathered = guard.find_violations(
+        [("localdep", "0.0.0", None, kind)],
+        [],
+        now=NOW,
+        min_age=MIN_AGE,
+        npm_published_at=_no_npm,
+        uv_baseline=EMPTY_BASE,  # candidate, yet still ignored
+        npm_baseline=EMPTY_BASE,
+    )
+    assert violations == []
+    assert warnings == []
+    assert grandfathered == []
+
+
+def test_find_violations_uv_unchanged_registry_missing_time_grandfathered():
+    """An UNCHANGED-from-baseline registry pin with no upload-time is NOT a
+    violation -- only *candidates* are enforced, so an already-vetted lock
+    pin missing a time is grandfathered (not retroactively flagged)."""
+    violations, warnings, grandfathered = guard.find_violations(
+        [("oldvetted", "1.0.0", None, "registry")],
+        [],
+        now=NOW,
+        min_age=MIN_AGE,
+        npm_published_at=_no_npm,
+        uv_baseline={("oldvetted", "1.0.0")},  # in baseline => NOT a candidate
+        npm_baseline=EMPTY_BASE,
+    )
+    assert violations == []
+    assert warnings == []
+    assert grandfathered == []
+
+
+def test_find_violations_uv_establishing_missing_time_not_violation():
+    """On a baseline-establishing run (uv_baseline=None) a registry pin with
+    no upload-time is NOT a violation (nothing is a candidate while
+    establishing)."""
+    violations, _, _ = guard.find_violations(
+        [("fresh", "9.9.9", None, "registry")],
+        [],
+        now=NOW,
+        min_age=MIN_AGE,
+        npm_published_at=_no_npm,
+        uv_baseline=None,
+        npm_baseline=None,
+    )
+    assert violations == []
+
+
+def test_find_violations_npm_scrubbed_resolved_candidate_is_violation():
+    """An npm ``unverifiable`` (scrubbed-resolved) CANDIDATE is a hard
+    violation (fail closed) -- the registry is NOT consulted (it is a
+    structural tamper indicator, not a transient network error)."""
+    violations, warnings, grandfathered = guard.find_violations(
+        [],
+        [("evilnpm", "2.0.0", None, "unverifiable")],
+        now=NOW,
+        min_age=MIN_AGE,
+        npm_published_at=_no_npm,  # must NOT be called
+        uv_baseline=EMPTY_BASE,
+        npm_baseline=EMPTY_BASE,
+    )
+    assert warnings == []
+    assert grandfathered == []
+    assert len(violations) == 1
+    v = violations[0]
+    assert isinstance(v, guard.Unverifiable)
+    assert v.ecosystem == "npm"
+    assert v.name == "evilnpm"
+    r = v.render(MIN_AGE)
+    assert "cannot verify age" in r
+    assert "no registry `resolved`" in r
+
+
+def test_find_violations_npm_scrubbed_resolved_unchanged_is_not_violation():
+    """An ``unverifiable`` npm pin that is UNCHANGED from baseline is trusted
+    (only candidates enforced) -- not retroactively flagged."""
+    violations, _, _ = guard.find_violations(
+        [],
+        [("legacy", "1.0.0", None, "unverifiable")],
+        now=NOW,
+        min_age=MIN_AGE,
+        npm_published_at=_no_npm,
+        uv_baseline=EMPTY_BASE,
+        npm_baseline={("legacy", "1.0.0")},
+    )
+    assert violations == []
+
+
+def test_find_violations_npm_scrubbed_resolved_establishing_not_violation():
+    """On an establishing npm run an ``unverifiable`` pin is not a violation
+    (nothing is a candidate while establishing)."""
+    violations, _, _ = guard.find_violations(
+        [],
+        [("legacy", "1.0.0", None, "unverifiable")],
+        now=NOW,
+        min_age=MIN_AGE,
+        npm_published_at=_no_npm,
+        uv_baseline=None,
+        npm_baseline=None,
+    )
+    assert violations == []
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +748,7 @@ def test_find_violations_npm_fresh_added_is_violation():
 
     violations, warnings, grandfathered = guard.find_violations(
         [],
-        [("freshnpm", "1.2.3")],
+        [("freshnpm", "1.2.3", "https://r/freshnpm-1.2.3.tgz", "registry")],
         now=NOW,
         min_age=MIN_AGE,
         npm_published_at=fetch,
@@ -392,7 +767,7 @@ def test_find_violations_npm_unchanged_from_baseline_is_grandfathered():
     registry is still consulted only for *candidate* (new/changed) deps."""
     violations, warnings, grandfathered = guard.find_violations(
         [],
-        [("vettednpm", "4.5.6")],
+        [("vettednpm", "4.5.6", "https://r/vettednpm-4.5.6.tgz", "registry")],
         now=NOW,
         min_age=MIN_AGE,
         # Unchanged deps must NOT trigger a registry lookup.
@@ -410,7 +785,7 @@ def test_find_violations_npm_unchanged_from_baseline_is_grandfathered():
 def test_find_violations_npm_old_added_is_clean():
     violations, warnings, grandfathered = guard.find_violations(
         [],
-        [("oldnpm", "9.9.9")],
+        [("oldnpm", "9.9.9", "https://r/oldnpm-9.9.9.tgz", "registry")],
         now=NOW,
         min_age=MIN_AGE,
         npm_published_at=lambda n, v: NOW - timedelta(days=60),
@@ -427,7 +802,7 @@ def test_find_violations_npm_lookup_failure_on_candidate_is_warning():
     (added/changed) dep is a WARNING, not a violation."""
     violations, warnings, grandfathered = guard.find_violations(
         [],
-        [("mystery", "0.1.0")],
+        [("mystery", "0.1.0", "https://r/mystery-0.1.0.tgz", "registry")],
         now=NOW,
         min_age=MIN_AGE,
         npm_published_at=lambda n, v: None,
@@ -446,7 +821,7 @@ def test_find_violations_npm_baseline_none_is_establishing():
     grandfathered (registry still consulted to surface it), not a violation."""
     violations, warnings, grandfathered = guard.find_violations(
         [],
-        [("freshnpm", "2.0.0")],
+        [("freshnpm", "2.0.0", "https://r/freshnpm-2.0.0.tgz", "registry")],
         now=NOW,
         min_age=MIN_AGE,
         npm_published_at=lambda n, v: NOW - timedelta(days=1),
@@ -471,7 +846,7 @@ def test_find_violations_npm_baseline_none_is_establishing():
 def test_find_violations_npm_boundary_is_pinned(delta, expect_violation):
     violations, warnings, _ = guard.find_violations(
         [],
-        [("npmboundary", "3.0.0")],
+        [("npmboundary", "3.0.0", "https://r/npmboundary-3.0.0.tgz", "registry")],
         now=NOW,
         min_age=MIN_AGE,
         npm_published_at=lambda n, v: NOW - delta,
@@ -559,6 +934,24 @@ def test_npm_published_at_version_absent_returns_none():
         return _FakeResp(body)
 
     assert guard.npm_published_at("x", "1.0.0", opener=opener) is None
+
+
+@pytest.mark.parametrize("v", [None, 123, [1], {"a": 1}, True])
+def test_npm_published_at_non_string_time_value_returns_none(v):
+    """FIX 3 regression: a registry returning ``time[version]`` as
+    null/number/list/object must yield None (fail-open warning), NOT crash.
+
+    Before FIX 3, ``iso_to_dt(times[version])`` -> ``s.strip()`` raised
+    ``AttributeError`` which is NOT in ``npm_published_at``'s
+    ``except (URLError, OSError, ValueError, KeyError, TypeError)`` tuple, so
+    ``find_violations``/``main`` crashed instead of recording a warning.
+    """
+    body = json.dumps({"time": {"1.0.0": v}}).encode()
+
+    def opener(url, timeout=None):
+        return _FakeResp(body)
+
+    assert guard.npm_published_at("pkg", "1.0.0", opener=opener) is None
 
 
 # ---------------------------------------------------------------------------
@@ -1065,3 +1458,154 @@ def test_main_report_text_is_exact_for_added_uv_violation(
     assert expected_line in out
     # And it appears exactly as one indented report line.
     assert f"  {expected_line}\n" in out
+
+
+# ---------------------------------------------------------------------------
+# FIX 2 end-to-end via main(): a baseline-present run with an injected ADDED
+# registry dep whose age cannot be verified must EXIT 1 (fail closed), not
+# print "OK"/"establishing". And THIS PR's real establishing run still exits 0.
+# ---------------------------------------------------------------------------
+
+# A registry-source uv package with NO upload-time (tampered: the sdist/wheel
+# upload-time was stripped after `uv add`).
+_TAMPERED_UV_NO_UPLOAD_TIME = """\
+[[package]]
+name = "tampered"
+version = "9.9.9"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://e/t.tgz" }
+"""
+
+
+def test_main_added_registry_dep_without_upload_time_exits_one(
+    tmp_path, monkeypatch, capsys
+):
+    """Post-merge style: baseline present (HEAD-like) and does NOT contain the
+    pin (added) and its ``upload-time`` was scrubbed -> the guard FAILS CLOSED
+    (exit 1, FAIL line), it does NOT print OK/establishing.
+
+    Old behavior: a registry pin with no upload-time was ``continue``-skipped
+    so this tampered added dep slipped past the guard with exit 0.
+    """
+    uv_lock, npm_lock = _write_locks(
+        tmp_path, _TAMPERED_UV_NO_UPLOAD_TIME, NPM_LOCK_SAMPLE
+    )
+    monkeypatch.setattr(
+        guard, "load_baseline", _baseline_from(("something-else", "1.0.0"))
+    )
+    rc = guard.main(
+        ["--uv-lock", str(uv_lock), "--npm-lock", str(npm_lock), "--skip-npm"]
+    )
+    out = capsys.readouterr().out
+    assert rc == 1, f"expected fail-closed exit 1, got {rc}:\n{out}"
+    assert "FAIL" in out
+    assert "tampered==9.9.9" in out
+    assert "cannot verify age" in out
+    assert "OK:" not in out
+    assert "establish" not in out.lower()
+
+
+def test_main_tampered_added_dep_unchanged_from_baseline_is_clean(
+    tmp_path, monkeypatch, capsys
+):
+    """No-false-positive guard: if that same upload-time-less registry pin is
+    UNCHANGED from baseline it is grandfathered (only candidates enforced)."""
+    uv_lock, npm_lock = _write_locks(
+        tmp_path, _TAMPERED_UV_NO_UPLOAD_TIME, NPM_LOCK_SAMPLE
+    )
+    monkeypatch.setattr(guard, "load_baseline", _baseline_from(("tampered", "9.9.9")))
+    rc = guard.main(
+        ["--uv-lock", str(uv_lock), "--npm-lock", str(npm_lock), "--skip-npm"]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "FAIL" not in out
+
+
+def test_main_added_npm_dep_with_scrubbed_resolved_exits_one(
+    tmp_path, monkeypatch, capsys
+):
+    """An ADDED npm dep that is registry-shaped (concrete semver) but whose
+    ``resolved`` was scrubbed -> fail closed (exit 1), npm registry NOT hit."""
+
+    def boom(*a, **k):  # the structural tamper must not need the network
+        raise AssertionError("registry must not be queried for unverifiable")
+
+    npm_obj = {
+        "name": "x",
+        "version": "0.0.0",
+        "lockfileVersion": 3,
+        "packages": {
+            "": {"name": "x", "version": "0.0.0"},
+            "node_modules/evilnpm": {"version": "3.3.3", "integrity": "sha512-q"},
+        },
+    }
+    uv_lock, npm_lock = _write_locks(tmp_path, UV_LOCK_SAMPLE, npm_obj)
+    monkeypatch.setattr(guard, "npm_published_at", boom)
+    # uv baseline matches its pins (no uv violation); npm baseline present and
+    # WITHOUT evilnpm -> evilnpm is an added candidate.
+    monkeypatch.setattr(
+        guard,
+        "load_baseline",
+        _baseline_from(("annotated-doc", "0.0.4"), ("click", "8.4.0")),
+    )
+    rc = guard.main(["--uv-lock", str(uv_lock), "--npm-lock", str(npm_lock)])
+    out = capsys.readouterr().out
+    assert rc == 1, f"expected fail-closed exit 1, got {rc}:\n{out}"
+    assert "FAIL" in out
+    assert "evilnpm@3.3.3" in out or "evilnpm==3.3.3" in out
+    assert "cannot verify age" in out
+
+
+def test_main_genuine_non_registry_uv_dep_does_not_false_fail(
+    tmp_path, monkeypatch, capsys
+):
+    """A legitimate editable/virtual/git uv entry (no upload-time, NOT a
+    registry source) as an added pin must NOT fail the guard -- the
+    fail-closed rule must not false-positive a normal local/vcs lock shape."""
+    local_uv = """\
+[[package]]
+name = "mylocaltool"
+source = { editable = "." }
+
+[[package]]
+name = "somevcs"
+version = "1.0.0"
+source = { git = "https://example/repo.git" }
+
+[[package]]
+name = "avirtual"
+version = "2.0.0"
+source = { virtual = "." }
+"""
+    uv_lock, npm_lock = _write_locks(tmp_path, local_uv, NPM_LOCK_SAMPLE)
+    # Baseline present but does NOT contain these -> they are "added"
+    # candidates; they must still be ignored (non-registry sources).
+    monkeypatch.setattr(guard, "load_baseline", _baseline_from(("unrelated", "0.0.1")))
+    rc = guard.main(
+        ["--uv-lock", str(uv_lock), "--npm-lock", str(npm_lock), "--skip-npm"]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0, f"legitimate non-registry lock false-failed:\n{out}"
+    assert "FAIL" not in out
+    assert "cannot verify age" not in out
+
+
+def test_main_this_pr_establishing_run_still_exits_zero_with_no_committed_lock(
+    tmp_path, monkeypatch, capsys
+):
+    """THIS PR: origin/main has no committed uv.lock -> baseline absent ->
+    establishing. Even the tampered (no upload-time) registry pin is
+    grandfathered, exit 0 -- the fail-closed rule only bites a *candidate*
+    (post-establishing delta), never the establishing run itself."""
+    uv_lock, npm_lock = _write_locks(
+        tmp_path, _TAMPERED_UV_NO_UPLOAD_TIME, NPM_LOCK_SAMPLE
+    )
+    monkeypatch.setattr(guard, "load_baseline", _baseline_absent)
+    rc = guard.main(
+        ["--uv-lock", str(uv_lock), "--npm-lock", str(npm_lock), "--skip-npm"]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "FAIL" not in out
+    assert "establish" in out.lower()

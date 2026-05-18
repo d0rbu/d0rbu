@@ -44,7 +44,16 @@ Actions):
   before reading the baseline (`git show <ref>:<path>`), so an absolute or
   otherwise non-repo-relative `--uv-lock`/`--npm-lock` cannot make the baseline
   read silently fail and degrade to a false "establishing" pass; a path
-  outside the repository is a hard error, not a silent skip.
+  outside the repository is a hard error, not a silent skip. The guard also
+  **fails closed on an unverifiable added/upgraded dependency**: an added pin
+  that looks like a registry package but whose age cannot be confirmed — a
+  uv `registry`-source pin with a missing/unparseable `upload-time`, or an
+  npm registry-shaped pin (concrete semver, not a link/file/git/workspace
+  entry) whose `resolved` was stripped — is a hard violation, not a silent
+  skip, so a hand-tampered lock cannot bypass the cooldown by scrubbing the
+  age marker. Genuine non-registry entries (editable/virtual/directory/git/
+  path/root for uv; `link:`/`file:`/`git+`/`git:`/workspace for npm)
+  legitimately have no registry publish time and are not age-checked.
 - **OpenSSF Scorecard** scores the repo's supply-chain posture weekly and
   uploads results to code scanning.
 - **SLSA build provenance** (`actions/attest-build-provenance`) is signed for

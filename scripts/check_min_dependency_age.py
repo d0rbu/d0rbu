@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import urllib.error
 import urllib.parse
@@ -71,8 +72,21 @@ DEFAULT_UV_LOCK = "uv.lock"
 DEFAULT_NPM_LOCK = "packages/npm/package-lock.json"
 DEFAULT_BASE_REF = "origin/main"
 
-UvPackage = tuple[str, str, "datetime | None"]
-NpmPackage = tuple[str, str]
+# (name, version, upload_time | None, source_kind | None). ``source_kind`` is
+# the discriminator key inside ``source = { <kind> = ... }`` in uv.lock
+# ("registry" / "editable" / "virtual" / "directory" / "path" / "git"), or
+# ``None`` when the package has no ``source`` line at all. Only a *registry*
+# source is subject to the registry-age policy and is expected to carry an
+# ``upload-time``; any other (or absent) source is a local/vcs/root project
+# that legitimately has no upload time and is never age-checked.
+UvPackage = tuple[str, str, "datetime | None", "str | None"]
+# (name, version, resolved | None, kind). ``kind`` is "registry" when the
+# entry has an ``http(s)`` ``resolved`` (verifiable) or "unverifiable" when it
+# is registry-shaped (concrete semver version, not a clearly-non-registry
+# form) but its ``resolved`` was stripped/scrubbed or is non-``http(s)``.
+# Genuine non-registry entries (root, link, file:/git+/git:/workspace,
+# version-less) are excluded entirely (not returned).
+NpmPackage = tuple[str, str, "str | None", str]
 PinSet = set[tuple[str, str]]
 Opener = Callable[..., Any]
 NpmFetcher = Callable[..., "datetime | None"]
@@ -114,6 +128,35 @@ class Violation:
         )
 
 
+@dataclass(frozen=True)
+class Unverifiable:
+    """A *candidate* whose age cannot be verified -> a hard FIX-2 violation.
+
+    Emitted (never silently skipped) when an added/changed pin looks like a
+    registry package but has no usable publish time: a uv ``registry``-source
+    entry whose ``upload-time`` is missing/unparseable, or an npm entry that
+    is registry-shaped (concrete semver, not link/file/git/workspace) but
+    whose ``resolved`` was scrubbed/non-``http(s)``. This is the
+    fail-**closed** path: a hand-tampered lock that strips the age marker off
+    a malicious added dependency must FAIL the guard, not bypass it. Carries
+    no timestamp, so it has its own ``render`` and is kept in the same
+    ``violations`` list (``main`` only calls ``render``).
+    """
+
+    ecosystem: str
+    name: str
+    version: str
+    detail: str
+
+    def render(self, min_age: timedelta) -> str:
+        days = int(min_age.total_seconds() // 86400)
+        return (
+            f"[{self.ecosystem}] {self.name}=={self.version} "
+            f"cannot verify age: {self.detail} "
+            f"(added/changed dependency must be verifiably >= {days}d old)"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Parsing
 # ---------------------------------------------------------------------------
@@ -124,7 +167,17 @@ def iso_to_dt(s: str) -> datetime:
 
     Handles the ``Z`` (Zulu) suffix, which ``datetime.fromisoformat`` does
     not accept on Python 3.10. Naive inputs are assumed to be UTC.
+
+    A non-string input (e.g. the npm registry or a tampered lock returning
+    ``time[version]`` / ``upload-time`` as null/number/list/object) raises
+    :class:`ValueError` -- the *documented clean failure* every caller already
+    absorbs -- never an uncaught ``AttributeError`` from ``str.strip``. This
+    keeps a malformed/odd timestamp degrading consistently (npm: fail-open
+    warning; uv candidate: ``upload_time is None`` -> a FIX-2 violation, never
+    a silent skip).
     """
+    if not isinstance(s, str):
+        raise ValueError(f"expected ISO 8601 timestamp string, got {type(s).__name__}")
     text = s.strip()
     if text.endswith(("Z", "z")):
         text = text[:-1] + "+00:00"
@@ -173,19 +226,55 @@ def _first_upload_time(block: str) -> datetime | None:
         return None
 
 
+def _source_kind(block: str) -> str | None:
+    """Discriminator key of the ``source = { <kind> = ... }`` inline table.
+
+    Returns the first key inside the ``source`` inline table -- one of
+    ``registry`` / ``editable`` / ``virtual`` / ``directory`` / ``path`` /
+    ``git`` in practice -- or ``None`` if the package has no ``source`` line
+    (some uv versions omit it for the root project). Only a ``registry``
+    source is subject to the rolling-age policy; everything else is a
+    local/vcs/root entry that legitimately has no ``upload-time``.
+
+    The lookup is line-scoped (split on real TOML newlines, like
+    :func:`parse_uv_lock`) and reads the first ``ident =`` token after
+    ``source = {`` so a crafted value cannot spoof the kind.
+    """
+    for line in block.replace("\r\n", "\n").split("\n"):
+        stripped = line.strip()
+        prefix = "source = {"
+        if not stripped.startswith(prefix):
+            continue
+        inner = stripped[len(prefix) :].lstrip()
+        # First ``key`` token up to the ``=`` (keys are bare idents here).
+        key = inner.split("=", 1)[0].strip()
+        return key or None
+    return None
+
+
 def parse_uv_lock(text: str) -> list[UvPackage]:
-    """Extract ``(name, version, upload_time | None)`` from ``uv.lock`` text.
+    """Extract ``(name, version, upload_time | None, source_kind | None)``.
 
     Iterates ``[[package]]`` blocks. ``name``/``version`` are read regardless
     of key order; ``upload_time`` is the first embedded ``upload-time`` in the
-    block (``None`` for the root/editable project and path deps).
+    block (``None`` for the root/editable project, path/vcs deps, or a
+    *tampered* registry entry whose ``upload-time`` was stripped);
+    ``source_kind`` is the ``source = { <kind> = ... }`` discriminator (or
+    ``None`` if absent) so a missing ``upload-time`` can be classified as
+    "tampered registry pin" (a FIX-2 violation for a candidate) vs
+    "legitimately timeless local/vcs/root entry" (always ignored).
     """
     blocks = text.split("[[package]]")
     packages: list[UvPackage] = []
     for block in blocks[1:]:
         name: str | None = None
         version: str | None = None
-        for line in block.splitlines():
+        # TOML newlines are ONLY ``\n`` / ``\r\n``. ``str.splitlines()`` also
+        # breaks on \x0b \x0c \x1c \x1d \x1e \x85 U+2028 U+2029 (and more),
+        # a crafted value embedded in a quoted string could exploit to
+        # fracture a ``key = "..."`` line and truncate/drop a package. Split
+        # only on real TOML newlines.
+        for line in block.replace("\r\n", "\n").split("\n"):
             if name is None:
                 got = _scalar(line, "name")
                 if got is not None:
@@ -199,32 +288,76 @@ def parse_uv_lock(text: str) -> list[UvPackage]:
                 break
         if name is None:
             continue
-        packages.append((name, version or "", _first_upload_time(block)))
+        packages.append(
+            (name, version or "", _first_upload_time(block), _source_kind(block))
+        )
     return packages
 
 
-def parse_npm_lock(json_obj: dict[str, Any]) -> list[NpmPackage]:
-    """Extract ``(name, version)`` for registry deps from a v3 lockfile.
+# A concrete semver-shaped version (``MAJOR.MINOR.PATCH`` with optional
+# prerelease/build). A registry-shaped candidate must have one; a missing /
+# non-semver ``version`` marks a genuine non-registry (link/workspace) entry.
+_SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)*$")
+# ``resolved`` schemes that mark a *genuine* non-registry source (never
+# age-checked): a local tarball, a git dependency, or a workspace link.
+_NON_REGISTRY_RESOLVED_PREFIXES = ("file:", "git+", "git:")
 
-    Only ``packages`` entries with a concrete ``version`` and a registry
-    ``resolved`` URL are returned. The root ``""`` entry and
-    ``link:``/``file:``/workspace entries are skipped.
+
+def parse_npm_lock(json_obj: dict[str, Any]) -> list[NpmPackage]:
+    """Extract ``(name, version, resolved | None, kind)`` from a v3 lockfile.
+
+    ``kind`` is:
+
+    * ``"registry"`` -- a normal registry dep (concrete semver ``version`` +
+      an ``http(s)`` ``resolved``); age-checked via the registry.
+    * ``"unverifiable"`` -- a *registry-shaped* entry (concrete semver
+      ``version``, not a clearly-non-registry form) whose ``resolved`` is
+      **missing or non-``http(s)``**. This is the FIX-2 fail-closed case: a
+      hand-tampered lock that scrubbed ``resolved`` off a malicious package
+      after ``npm install`` must NOT silently drop out of the guard --
+      ``find_violations`` records it as a hard violation for a *candidate*.
+
+    Genuine non-registry entries are excluded entirely (never returned):
+    the root ``""`` entry, ``link: true`` entries, entries whose ``resolved``
+    starts ``file:`` / ``git+`` / ``git:`` or is a relative workspace path
+    (no URL scheme), and entries with no concrete semver ``version``. These
+    legitimately have no registry publish time and are not subject to the
+    registry-age policy.
     """
     packages = json_obj.get("packages")
     if not isinstance(packages, dict):
         return []
     result: list[NpmPackage] = []
     for path, meta in packages.items():
+        # Root project entry ("") -- never a registry dep.
         if not path or not isinstance(meta, dict):
             continue
+        # Explicit workspace/link entry -- genuine non-registry.
+        if meta.get("link") is True:
+            continue
         version = meta.get("version")
+        # No concrete semver version -> not a registry-shaped pin (workspace
+        # roots, link targets, alias-only entries). Genuine non-registry.
+        if not isinstance(version, str) or not _SEMVER_RE.match(version):
+            continue
         resolved = meta.get("resolved")
-        if not isinstance(version, str) or not isinstance(resolved, str):
-            continue
-        if not resolved.startswith(("http://", "https://")):
-            continue
         name = path.split("node_modules/")[-1]
-        result.append((name, version))
+        if isinstance(resolved, str) and resolved.startswith(("http://", "https://")):
+            result.append((name, version, resolved, "registry"))
+            continue
+        # A genuine non-registry resolved form (local tarball / git / VCS) or
+        # a relative workspace path (no URL scheme) -> excluded, not policed.
+        if isinstance(resolved, str) and (
+            resolved.startswith(_NON_REGISTRY_RESOLVED_PREFIXES)
+            or "://" not in resolved
+        ):
+            continue
+        # Registry-shaped (concrete semver, not link/file/git/workspace) but
+        # ``resolved`` is missing or a non-``http(s)`` URL -> the age cannot
+        # be verified for what looks like a registry package. Fail CLOSED:
+        # tag it so a *candidate* becomes a hard violation.
+        kept = resolved if isinstance(resolved, str) else None
+        result.append((name, version, kept, "unverifiable"))
     return result
 
 
@@ -324,14 +457,14 @@ def load_baseline(
     except BaselineUnavailable:
         return None
     if kind == "uv":
-        return {(name, version) for name, version, _ in parse_uv_lock(content)}
+        return {(name, version) for name, version, _, _ in parse_uv_lock(content)}
     try:
         obj = json.loads(content)
     except ValueError:
         return set()
     if not isinstance(obj, dict):
         return set()
-    return set(parse_npm_lock(obj))
+    return {(name, version) for name, version, _, _ in parse_npm_lock(obj)}
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +515,7 @@ def find_violations(
     npm_published_at: NpmFetcher = npm_published_at,
     uv_baseline: PinSet | None,
     npm_baseline: PinSet | None,
-) -> tuple[list[Violation], list[str], list[Violation]]:
+) -> tuple[list[Violation | Unverifiable], list[str], list[Violation]]:
     """Classify lock entries with delta/baseline (Dependabot-cooldown) rules.
 
     A pin is a *candidate* only if it is **not** in the baseline set (added or
@@ -391,40 +524,135 @@ def find_violations(
 
     Returns ``(violations, warnings, grandfathered_young)``:
 
-    * ``violations`` -- hard failures: candidates younger than ``min_age``
-      (uv from the embedded ``upload-time``; npm via the registry).
-    * ``warnings`` -- npm candidates whose registry lookup failed (fail-open;
-      never blocks CI on a transient/registry error).
+    * ``violations`` -- hard failures. A :class:`Violation` is a candidate
+      younger than ``min_age`` (uv from the embedded ``upload-time``; npm via
+      the registry). An :class:`Unverifiable` is the **fail-closed** case: a
+      candidate that looks like a registry package but whose age cannot be
+      verified -- a uv ``registry``-source pin with a missing/unparseable
+      ``upload-time``, or an npm registry-shaped pin whose ``resolved`` was
+      scrubbed/non-``http(s)``. A hand-tampered lock that strips the age
+      marker off a malicious *added* dependency must FAIL here, not bypass.
+    * ``warnings`` -- npm candidates whose **registry network lookup** failed
+      (fail-open; a flaky registry must not block CI -- distinct from a
+      *structurally* unverifiable scrubbed-``resolved`` entry, which is a
+      hard violation above).
     * ``grandfathered_young`` -- deps younger than ``min_age`` that are
       *accepted* anyway (establishing run, or unchanged from baseline with a
       known publish time) -- surfaced purely for visibility.
 
-    uv pins without an ``upload-time`` (root/path dep) are always ignored.
-    Unchanged-from-baseline npm pins are trusted without a registry lookup.
+    uv entries that are NOT a ``registry`` source (editable/virtual/
+    directory/path/git/root, or no ``source`` line) legitimately have no
+    ``upload-time`` and are never age-checked. An unchanged-from-baseline pin
+    is grandfathered (only *candidates* are enforced), so a registry pin that
+    was already in the baseline without an ``upload-time`` is not retroactively
+    flagged. Unchanged-from-baseline npm pins are trusted without a lookup.
     """
-    violations: list[Violation] = []
+    violations: list[Violation | Unverifiable] = []
     warnings: list[str] = []
     grandfathered: list[Violation] = []
 
+    _classify_uv(
+        uv_pkgs,
+        now=now,
+        min_age=min_age,
+        uv_baseline=uv_baseline,
+        violations=violations,
+        grandfathered=grandfathered,
+    )
+    _classify_npm(
+        npm_pkgs,
+        now=now,
+        min_age=min_age,
+        npm_baseline=npm_baseline,
+        npm_published_at=npm_published_at,
+        violations=violations,
+        warnings=warnings,
+        grandfathered=grandfathered,
+    )
+    return violations, warnings, grandfathered
+
+
+def _classify_uv(
+    uv_pkgs: Iterable[UvPackage],
+    *,
+    now: datetime,
+    min_age: timedelta,
+    uv_baseline: PinSet | None,
+    violations: list[Violation | Unverifiable],
+    grandfathered: list[Violation],
+) -> None:
+    """uv side of :func:`find_violations` (split out for branch budget)."""
     uv_establishing = uv_baseline is None
-    for name, version, uploaded in uv_pkgs:
+    for name, version, uploaded, source_kind in uv_pkgs:
+        # Non-registry (or source-less) entries -- editable/virtual/directory/
+        # path/git/root project -- legitimately have no upload-time and are
+        # not subject to the registry-age policy. Ignore regardless of age.
+        if source_kind != "registry":
+            continue
+        is_candidate = not uv_establishing and (name, version) not in uv_baseline
         if uploaded is None:
+            # A *registry* pin with no usable upload-time. For a CANDIDATE
+            # this is fail-closed: the age of an added/changed registry dep
+            # cannot be verified (e.g. a tampered lock stripped/garbled
+            # ``upload-time``) -> a hard violation, never a silent skip. For
+            # an unchanged/establishing pin only candidates are enforced, so
+            # it is grandfathered (not retroactively flagged).
+            if is_candidate:
+                violations.append(
+                    Unverifiable(
+                        "uv",
+                        name,
+                        version,
+                        "missing/invalid upload-time for added registry "
+                        f"dependency {name}=={version}",
+                    )
+                )
             continue
         age = now - uploaded
         if age >= min_age:
             continue
-        is_candidate = not uv_establishing and (name, version) not in uv_baseline
         record = Violation("uv", name, version, uploaded, age)
         if is_candidate:
             violations.append(record)
         else:
             grandfathered.append(record)
 
+
+def _classify_npm(
+    npm_pkgs: Iterable[NpmPackage],
+    *,
+    now: datetime,
+    min_age: timedelta,
+    npm_baseline: PinSet | None,
+    npm_published_at: NpmFetcher,
+    violations: list[Violation | Unverifiable],
+    warnings: list[str],
+    grandfathered: list[Violation],
+) -> None:
+    """npm side of :func:`find_violations` (split out for branch budget)."""
     npm_establishing = npm_baseline is None
-    for name, version in npm_pkgs:
+    for name, version, _resolved, kind in npm_pkgs:
         unchanged = not npm_establishing and (name, version) in npm_baseline
         if unchanged:
             # Trusted baseline pin: no registry call, no surfacing.
+            continue
+        is_candidate = not npm_establishing
+        if kind == "unverifiable":
+            # Registry-shaped (concrete semver, not link/file/git/workspace)
+            # but ``resolved`` was scrubbed/non-http(s): the age cannot be
+            # verified for what looks like a registry package. Fail CLOSED
+            # for a CANDIDATE (this is a *structural* tamper indicator, NOT a
+            # transient network error, so it is a violation, not a warning).
+            if is_candidate:
+                violations.append(
+                    Unverifiable(
+                        "npm",
+                        name,
+                        version,
+                        f"added npm dependency {name}@{version} has no "
+                        "registry `resolved`",
+                    )
+                )
             continue
         published = npm_published_at(name, version)
         if published is None:
@@ -441,8 +669,6 @@ def find_violations(
             grandfathered.append(record)
         else:
             violations.append(record)
-
-    return violations, warnings, grandfathered
 
 
 # ---------------------------------------------------------------------------

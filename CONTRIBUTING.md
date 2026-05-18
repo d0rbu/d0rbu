@@ -10,7 +10,7 @@ make setup     # uv venv + dev deps + pre-commit hooks
 
 ```bash
 make check     # lint + typecheck + test + format-check (the CI gate)
-make test      # tests with coverage (≥90% enforced)
+make test      # tests with coverage (100% enforced)
 make precommit # run all pre-commit hooks
 ```
 
@@ -28,9 +28,13 @@ make precommit # run all pre-commit hooks
   `origin/main` are grandfathered, and the first PR that introduces the
   lockfiles is baseline-establishing and passes. `uv`/`npm` have no native
   rolling minimum-age setting at the lock layer, so this guard provides it for
-  new/changed deps.
+  new/changed deps. An added/upgraded pin whose age cannot be verified —
+  a uv `registry` pin with a missing/unparseable `upload-time`, or an npm
+  registry-shaped pin whose `resolved` was stripped — **fails closed** (it is
+  a violation, not a silent skip) so a hand-tampered lock cannot bypass the
+  cooldown; genuine non-registry entries (local/vcs/workspace) are exempt.
 - Code must pass `ruff` (lint + format) and `ty` (typing). New behavior needs
-  tests; coverage is gated at 90%.
+  tests; coverage is gated at 100%.
 
 ## Releasing
 
