@@ -250,12 +250,53 @@ def _git_show(base_ref: str, path: str) -> str:
     return out.decode("utf-8", errors="replace")
 
 
+def _git_repo_root() -> Path:
+    """Absolute path of the enclosing git work tree root.
+
+    Raises :class:`BaselineUnavailable` if git is unavailable or the CWD is
+    not inside a work tree, so callers degrade to *baseline-establishing*
+    rather than crash (mirrors :func:`_git_show`).
+    """
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],  # noqa: S607 - `git` resolved from PATH by design
+            stderr=subprocess.DEVNULL,
+        )
+    except (subprocess.CalledProcessError, OSError) as exc:
+        raise BaselineUnavailable(
+            f"git rev-parse --show-toplevel failed: {exc}"
+        ) from exc
+    return Path(out.decode("utf-8", errors="replace").strip()).resolve()
+
+
+def _repo_relative_lock_path(path: str, repo_root: Path) -> str:
+    """Normalize ``path`` to a forward-slash path relative to ``repo_root``.
+
+    ``git show <ref>:<pathspec>`` needs a *repo-root-relative* pathspec; an
+    absolute or otherwise non-repo-relative path makes git fail, which would
+    otherwise be misread as "baseline absent" and silently grandfather a
+    fresh dependency. A path that resolves *outside* the repo is a hard
+    :class:`ValueError` (never a silent establishing pass).
+    """
+    resolved = Path(path).resolve()
+    try:
+        rel = resolved.relative_to(repo_root)
+    except ValueError as exc:
+        raise ValueError(
+            f"lock path {path!r} is outside the git repository "
+            f"({repo_root}); the dependency-age guard requires a "
+            f"repo-relative lock path"
+        ) from exc
+    return rel.as_posix()
+
+
 def load_baseline(
     base_ref: str,
     path: str,
     *,
     kind: str,
     runner: GitRunner = _git_show,
+    repo_root: Callable[[], Path] = _git_repo_root,
 ) -> PinSet | None:
     """Return the baseline ``{(name, version)}`` set, or ``None``.
 
@@ -264,9 +305,22 @@ def load_baseline(
     A present-but-unparseable lock yields an **empty set** (distinct from
     ``None``): the lock existed at the base ref so every current pin still
     counts as "added" and is a candidate for the age check.
+
+    ``path`` is first normalized to a repo-root-relative pathspec (an
+    absolute or non-repo-relative path would make ``git show`` fail and be
+    misread as a missing baseline -- silently grandfathering a fresh dep). A
+    path resolving outside the repo raises :class:`ValueError` (hard error,
+    never a silent establishing pass). If the repo root itself cannot be
+    resolved (no git / not a work tree) the baseline is genuinely
+    unavailable -> ``None`` (establishing), as before.
     """
     try:
-        content = runner(base_ref, path)
+        root = repo_root()
+    except BaselineUnavailable:
+        return None
+    pathspec = _repo_relative_lock_path(path, root)
+    try:
+        content = runner(base_ref, pathspec)
     except BaselineUnavailable:
         return None
     if kind == "uv":

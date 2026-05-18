@@ -645,6 +645,108 @@ def test_git_show_runner_returns_content_on_success(monkeypatch):
     assert guard._git_show("origin/main", "uv.lock") == "version = 1\n"
 
 
+def test_git_show_runner_oserror_means_baseline_unavailable(monkeypatch):
+    """git binary missing / unexecutable (OSError, e.g. FileNotFoundError)
+    is mapped to BaselineUnavailable, NOT a raw crash, so load_baseline can
+    degrade to establishing in an environment without git."""
+
+    def fake_check_output(cmd, *a, **k):
+        raise FileNotFoundError("git: command not found")
+
+    monkeypatch.setattr(subprocess, "check_output", fake_check_output)
+    with pytest.raises(guard.BaselineUnavailable):
+        guard._git_show("origin/main", "uv.lock")
+
+
+def test_load_baseline_npm_valid_json_non_dict_yields_empty_set_not_none():
+    """A present npm baseline that is valid JSON but not an object (e.g. a
+    JSON array ``[]``) is an empty set (the lock existed at base, so every
+    current pin is still 'added'), distinct from None (== establishing)."""
+
+    def runner(base_ref, path):
+        return "[]"
+
+    result = guard.load_baseline(
+        "origin/main", "p/lock.json", kind="npm", runner=runner
+    )
+    assert result == set()
+    assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# iso_to_dt — naive + non-UTC offset normalization (Py3.10-safe target)
+# ---------------------------------------------------------------------------
+
+
+def test_iso_to_dt_naive_timestamp_is_assumed_utc():
+    """A timestamp with NO timezone is treated as UTC (tzinfo == utc)."""
+    got = guard.iso_to_dt("2025-11-10T22:07:42.062")
+    assert got.tzinfo == timezone.utc
+    assert got == _dt(2025, 11, 10, 22, 7, 42, 62000)
+
+
+def test_iso_to_dt_non_utc_offset_is_normalized_to_utc():
+    """A non-UTC offset (e.g. +05:00) is normalized so the result is UTC."""
+    got = guard.iso_to_dt("2025-11-10T22:07:42+05:00")
+    assert got.utcoffset() == timedelta(0)
+    # 22:07:42 +05:00 == 17:07:42 UTC
+    assert got == _dt(2025, 11, 10, 17, 7, 42)
+
+
+# ---------------------------------------------------------------------------
+# load_baseline — repo-relative lock path resolution (supply-chain guard:
+# an absolute / non-repo-relative lock path must NOT silently false-pass as
+# "establishing" — that would grandfather a fresh malicious dep).
+# ---------------------------------------------------------------------------
+
+
+def test_load_baseline_absolute_in_repo_path_resolves_not_false_establishing():
+    """REGRESSION: an ABSOLUTE path to an in-repo lock that DOES exist at the
+    base ref must resolve the real baseline, NOT degrade to None.
+
+    Before the fix ``git show <ref>:<absolute-path>`` always failed ->
+    BaselineUnavailable -> None -> the run silently became
+    'baseline-establishing' (exit 0), grandfathering a fresh malicious dep.
+    Using ``HEAD`` (this branch tip, which DOES commit ``uv.lock``) as a
+    stand-in baseline ref + the repo's real absolute ``uv.lock`` path, the
+    baseline must come back as a non-empty pin set.
+    """
+    abs_uv_lock = str(_REPO_ROOT / "uv.lock")
+    result = guard.load_baseline("HEAD", abs_uv_lock, kind="uv")
+    assert result is not None, (
+        "absolute in-repo lock path falsely degraded to None "
+        "(== baseline-establishing false-pass)"
+    )
+    assert len(result) > 0
+
+
+def test_load_baseline_path_outside_repo_raises_clear_error():
+    """A lock path OUTSIDE the git repo is a hard, explicit error (non-zero),
+    never a silent 'establishing' pass."""
+    with pytest.raises(ValueError, match="outside"):
+        guard.load_baseline("HEAD", "/etc/hostname", kind="uv")
+
+
+def test_main_absolute_in_repo_lock_does_not_false_establish(capsys):
+    """End-to-end: ``main`` with the repo's real ABSOLUTE ``uv.lock`` and
+    ``--base-ref HEAD`` (which commits uv.lock) must NOT print an
+    'establishing' baseline line and must NOT exit 0 via the
+    establishing/no-committed-lock path (it resolves the real baseline).
+    """
+    abs_uv_lock = str(_REPO_ROOT / "uv.lock")
+    rc = guard.main(["--uv-lock", abs_uv_lock, "--base-ref", "HEAD", "--skip-npm"])
+    out = capsys.readouterr().out
+    low = out.lower()
+    assert "establish" not in low, (
+        f"absolute in-repo lock path falsely reported establishing:\n{out}"
+    )
+    assert "no committed lock at base" not in low
+    # Baseline resolved against HEAD == current pins -> nothing newly
+    # added/upgraded -> a genuine clean pass (delta mode, not establishing).
+    assert rc == 0
+    assert "delta vs HEAD" in out
+
+
 # ---------------------------------------------------------------------------
 # main — baseline / establishing semantics
 # ---------------------------------------------------------------------------

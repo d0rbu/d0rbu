@@ -40,7 +40,11 @@ Actions):
   *baseline-establishing* and passes, listing the young deps for visibility;
   every subsequent bump is enforced. A confirmed too-fresh added/upgraded
   package fails the check; a transient npm-registry lookup error is a warning,
-  not a block.
+  not a block. The guard resolves lock paths to a repository-relative pathspec
+  before reading the baseline (`git show <ref>:<path>`), so an absolute or
+  otherwise non-repo-relative `--uv-lock`/`--npm-lock` cannot make the baseline
+  read silently fail and degrade to a false "establishing" pass; a path
+  outside the repository is a hard error, not a silent skip.
 - **OpenSSF Scorecard** scores the repo's supply-chain posture weekly and
   uploads results to code scanning.
 - **SLSA build provenance** (`actions/attest-build-provenance`) is signed for
