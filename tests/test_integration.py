@@ -138,3 +138,24 @@ def test_ascii_io_encoding_does_not_crash():
         stdin=subprocess.DEVNULL,
     )
     assert r2.returncode == 0 and "Traceback" not in r2.stderr
+
+
+def test_help_under_ascii_encoding_does_not_crash():
+    """argparse -h help contains 'résumé'; under PYTHONIOENCODING=ascii the
+    stdout-hardening must let it degrade, not traceback."""
+    env = {
+        **os.environ,
+        "PYTHONIOENCODING": "ascii",
+        "HENRY_CASTILLO_NO_UPDATE_CHECK": "1",
+    }
+    r = subprocess.run(
+        [sys.executable, "-m", "henry_castillo", "-h"],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+        stdin=subprocess.DEVNULL,
+    )
+    assert r.returncode == 0
+    assert "Traceback" not in r.stdout and "Traceback" not in r.stderr
+    assert "UnicodeEncodeError" not in r.stderr

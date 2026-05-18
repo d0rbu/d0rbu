@@ -6,6 +6,7 @@ so it is trivially testable via ``rich.console.Console`` capture.
 
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Callable, Sequence
 
 from rich.console import Console, Group, RenderableType
@@ -39,8 +40,12 @@ def about(profile: Profile) -> RenderableType:
 def projects(projects: Sequence[Project], tag: str | None = None) -> RenderableType:
     items = list(projects)
     if tag is not None:
-        wanted = tag.casefold()
-        items = [p for p in items if any(t.casefold() == wanted for t in p.tags)]
+        wanted = unicodedata.normalize("NFC", tag).casefold()
+        items = [
+            p
+            for p in items
+            if any(unicodedata.normalize("NFC", t).casefold() == wanted for t in p.tags)
+        ]
     if not items:
         msg = (
             f"No projects tagged '{tag}'."

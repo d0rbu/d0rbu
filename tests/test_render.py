@@ -1,4 +1,5 @@
 import io
+import unicodedata
 
 from rich.console import Console
 
@@ -222,6 +223,23 @@ def test_projects_item_with_no_tags():
     notag = Project("notag-proj", "blurb", "https://example.com", [])
     out = _text(render.projects([notag]))
     assert "notag-proj" in out
+
+
+def test_projects_tag_filter_nfc_nfd_insensitive():
+    nfd = unicodedata.normalize("NFD", "café")
+    nfc = unicodedata.normalize("NFC", "café")
+    assert nfd != nfc
+    projs = [
+        Project("p-accent", "blurb", "https://x", [nfd]),  # content tag in NFD
+        Project("p-other", "b", "https://y", ["web"]),
+    ]
+    # query in NFC must still match the NFD-stored tag, and vice-versa
+    for query in (nfc, nfd):
+        out = _text(render.projects(projs, tag=query))
+        assert "p-accent" in out
+        assert "p-other" not in out
+    # a genuinely different tag still does not match
+    assert "p-accent" not in _text(render.projects(projs, tag="zzz"))
 
 
 def test_content_with_bracket_markup_renders_literally():
