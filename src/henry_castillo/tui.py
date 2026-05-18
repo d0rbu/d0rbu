@@ -29,7 +29,7 @@ OpenUrlFn = Callable[[str], None]
 def _default_select(message: str, choices: list[str]) -> str | None:
     try:
         return questionary.select(message, choices=choices).ask()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, EOFError):
         return None
 
 

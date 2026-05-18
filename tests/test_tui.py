@@ -197,3 +197,11 @@ def test_menu_order_passed_to_select():
     assert captured == [
         ["About", "Projects", "Résumé", "Contact", "Substack", "Lab (locked)", "Quit"]
     ]
+
+
+def test_default_select_returns_none_on_eoferror(monkeypatch):
+    def fake_select(*_a, **_k):
+        raise EOFError
+
+    monkeypatch.setattr(tui.questionary, "select", fake_select)
+    assert tui._default_select("Pick", ["About"]) is None
