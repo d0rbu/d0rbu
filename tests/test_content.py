@@ -1,39 +1,95 @@
 import json
-from pathlib import Path
 
 import pytest
 
 from henry_castillo import content
 
 
-def _write(
-    dirpath: Path, profile: dict | None = None, projects: object | None = None
-) -> Path:
-    cdir = dirpath / "_content"
+def _pkg(monkeypatch, tmp_path, *, profile=None, projects=None):
+    """Write tmp content files and point _packaged_resource at them.
+    A pathlib.Path satisfies the Traversable protocol (is_file/read_text)."""
+    cdir = tmp_path / "_content"
     cdir.mkdir(parents=True, exist_ok=True)
     if profile is not None:
         (cdir / "profile.json").write_text(json.dumps(profile), encoding="utf-8")
     if projects is not None:
         (cdir / "projects.json").write_text(json.dumps(projects), encoding="utf-8")
+
+    def fake(name: str):
+        f = cdir / name
+        return f if f.is_file() else None
+
+    monkeypatch.setattr(content, "_packaged_resource", fake)
     return cdir
 
 
-def test_content_dir_prefers_packaged(tmp_path, monkeypatch):
-    cdir = _write(tmp_path, profile={"name": "X"})
-    monkeypatch.setattr(content, "_packaged_content", lambda: tmp_path / "_content")
-    assert content._content_dir() == cdir
+def _force_repo_fallback(monkeypatch):
+    """Make the packaged lookup return None so the repo content/ is used."""
+    monkeypatch.setattr(content, "_packaged_resource", lambda _name: None)
 
 
-def test_content_dir_falls_back_to_repo(tmp_path, monkeypatch):
-    (tmp_path / "_content").mkdir(parents=True)
-    monkeypatch.setattr(content, "_packaged_content", lambda: tmp_path / "_content")
-    got = content._content_dir()
-    assert got.name == "content"
-    assert (got / "profile.json").is_file()
+def test_packaged_resource_used_when_present(tmp_path, monkeypatch):
+    _pkg(monkeypatch, tmp_path, profile={"name": "X"})
+    assert content.load_profile().name == "X"
+
+
+def test_repo_fallback_loads_real_committed_content(monkeypatch):
+    _force_repo_fallback(monkeypatch)
+    p = content.load_profile()
+    assert p.handle == "d0rbu"  # the committed content/profile.json
+    assert (content._repo_content_file("profile.json")).is_file()
+
+
+def test_only_one_packaged_file_present_other_falls_back(tmp_path, monkeypatch):
+    # Only projects.json is packaged; profile.json must independently
+    # resolve (here: repo fallback) — no all-or-nothing coupling.
+    _pkg(monkeypatch, tmp_path, projects=[{"name": "P"}])
+    assert [x.name for x in content.load_projects()] == ["P"]
+    assert content.load_profile().handle == "d0rbu"  # repo fallback
+
+
+def test_packaged_resource_guarded_against_files_error(monkeypatch):
+    def boom(_pkg_name):
+        raise ModuleNotFoundError("no metadata")
+
+    monkeypatch.setattr(content, "files", boom)
+    assert content._packaged_resource("profile.json") is None
+
+
+def test_packaged_resource_returns_traversable_when_is_file(tmp_path, monkeypatch):
+    """Exercise the ``return resource`` branch (line that returns the Traversable)."""
+    fake_file = tmp_path / "profile.json"
+    fake_file.write_text("{}", encoding="utf-8")
+
+    class FakePackage:
+        def joinpath(self, *_parts):
+            return fake_file
+
+    monkeypatch.setattr(content, "files", lambda _pkg: FakePackage())
+    result = content._packaged_resource("profile.json")
+    assert result is fake_file
+
+
+def test_read_json_recursionerror_returns_none(tmp_path, monkeypatch):
+    _pkg(monkeypatch, tmp_path, profile={"name": "ok"})
+
+    def recursive_loads(_text):
+        raise RecursionError("too deep")
+
+    monkeypatch.setattr(content.json, "loads", recursive_loads)
+    assert content._read_json("profile.json") is None
+    assert content.load_profile() == content.Profile()
+    assert content.load_projects() == []
+
+
+def test_read_json_utf8_non_ascii(tmp_path, monkeypatch):
+    _pkg(monkeypatch, tmp_path, profile={"name": "Héctor Castañeda", "handle": "h"})
+    assert content.load_profile().name == "Héctor Castañeda"
 
 
 def test_load_profile_full(tmp_path, monkeypatch):
-    _write(
+    _pkg(
+        monkeypatch,
         tmp_path,
         profile={
             "name": "Henry Castillo",
@@ -50,7 +106,6 @@ def test_load_profile_full(tmp_path, monkeypatch):
             },
         },
     )
-    monkeypatch.setattr(content, "_packaged_content", lambda: tmp_path / "_content")
     p = content.load_profile()
     assert (p.name, p.handle, p.tagline, p.about) == (
         "Henry Castillo",
@@ -71,40 +126,42 @@ def test_load_profile_malformed_returns_empty(tmp_path, monkeypatch, blob):
     cdir = tmp_path / "_content"
     cdir.mkdir(parents=True)
     (cdir / "profile.json").write_text(blob, encoding="utf-8")
-    monkeypatch.setattr(content, "_packaged_content", lambda: tmp_path / "_content")
-    p = content.load_profile()
-    assert p == content.Profile()
-
-
-def test_load_profile_missing_file_returns_empty(tmp_path, monkeypatch):
-    empty_dir = tmp_path / "empty"
-    empty_dir.mkdir()
-    monkeypatch.setattr(content, "_content_dir", lambda: empty_dir)
+    monkeypatch.setattr(
+        content,
+        "_packaged_resource",
+        lambda name: (cdir / name) if (cdir / name).is_file() else None,
+    )
     assert content.load_profile() == content.Profile()
 
 
+def test_load_profile_missing_file_returns_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(content, "_packaged_resource", lambda _n: None)
+    monkeypatch.setattr(content, "_repo_content_file", lambda n: tmp_path / "nope" / n)
+    assert content.load_profile() == content.Profile()
+    assert content.load_projects() == []
+
+
 def test_load_profile_partial_and_bad_subtypes(tmp_path, monkeypatch):
-    _write(
+    _pkg(
+        monkeypatch,
         tmp_path,
         profile={"name": "N", "contact": "nope", "links": "nope", "resume": "nope"},
     )
-    monkeypatch.setattr(content, "_packaged_content", lambda: tmp_path / "_content")
     p = content.load_profile()
     assert p.name == "N" and p.email == "" and p.links == {}
     assert p.resume == content.Resume()
 
 
 def test_load_projects(tmp_path, monkeypatch):
-    _write(
+    _pkg(
+        monkeypatch,
         tmp_path,
-        profile={},
         projects=[
             {"name": "A", "blurb": "b", "url": "u", "tags": ["t", 1]},
             "garbage",
             {"name": "B"},
         ],
     )
-    monkeypatch.setattr(content, "_packaged_content", lambda: tmp_path / "_content")
     ps = content.load_projects()
     assert [x.name for x in ps] == ["A", "B"]
     assert ps[0].tags == ["t"]
@@ -115,30 +172,26 @@ def test_load_projects(tmp_path, monkeypatch):
 def test_load_projects_malformed_returns_empty_list(tmp_path, monkeypatch, blob):
     cdir = tmp_path / "_content"
     cdir.mkdir(parents=True)
-    (cdir / "profile.json").write_text("{}", encoding="utf-8")
     (cdir / "projects.json").write_text(blob, encoding="utf-8")
-    monkeypatch.setattr(content, "_packaged_content", lambda: tmp_path / "_content")
+    monkeypatch.setattr(
+        content,
+        "_packaged_resource",
+        lambda name: (cdir / name) if (cdir / name).is_file() else None,
+    )
     assert content.load_projects() == []
 
 
-def test_packaged_content_returns_path():
-    p = content._packaged_content()
-    assert isinstance(p, Path)
-    assert p.name == "_content"
-
-
-def test_real_repo_content_loads_and_is_coherent():
-    """The committed content/*.json must parse via the loader into a coherent
-    Profile/Projects (schema conformance for the drafted content)."""
+def test_real_repo_content_loads_and_is_coherent(monkeypatch):
+    _force_repo_fallback(monkeypatch)
     p = content.load_profile()
     assert isinstance(p, content.Profile)
     assert p.handle == "d0rbu"
-    assert p.name  # non-empty
+    assert p.name
     assert p.links.get("github") == "https://github.com/d0rbu"
     assert isinstance(p.resume, content.Resume)
     projects = content.load_projects()
     assert isinstance(projects, list)
     for proj in projects:
         assert isinstance(proj, content.Project)
-        assert proj.name  # every project has a name
+        assert proj.name
         assert isinstance(proj.tags, list)

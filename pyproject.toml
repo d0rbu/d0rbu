@@ -75,7 +75,7 @@ known-first-party = ["henry_castillo"]
 docstring-code-format = true
 
 [tool.ty.environment]
-python-version = "3.10"
+python-version = "3.11"
 root = ["src"]
 
 [tool.pytest.ini_options]
@@ -91,4 +91,5 @@ show_missing = true
 exclude_lines = [
   "pragma: no cover",
   "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
 ]

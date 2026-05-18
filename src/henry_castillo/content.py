@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from importlib.resources import files
+from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import cast
 
@@ -42,23 +43,36 @@ class Project:
     tags: list[str] = field(default_factory=list)
 
 
-def _packaged_content() -> Path:
-    """The packaged data directory inside the installed package."""
-    return Path(str(files("henry_castillo"))) / "_content"
+def _packaged_resource(name: str) -> Traversable | None:
+    """The bundled ``henry_castillo/_content/<name>`` as a Traversable, or
+    ``None`` if it is not a readable packaged resource (dev checkout, or a
+    loader without resource support). Zip-safe (works under zipimport)."""
+    try:
+        resource = files("henry_castillo").joinpath("_content", name)
+        if resource.is_file():
+            return resource
+    except (ModuleNotFoundError, TypeError, ValueError, OSError):
+        return None
+    return None
 
 
-def _content_dir() -> Path:
-    """Packaged content dir if present, else the repo-root ``content/``."""
-    packaged = _packaged_content()
-    if (packaged / "profile.json").is_file():
-        return packaged
-    return Path(__file__).resolve().parents[2] / "content"
+def _repo_content_file(name: str) -> Path:
+    """The repo-root ``content/<name>`` used in an editable/dev checkout."""
+    return Path(__file__).resolve().parents[2] / "content" / name
 
 
 def _read_json(name: str) -> object:
+    """Parse a bundled JSON file. Packaged resource first, else repo-root
+    ``content/``. Never raises — returns ``None`` on any read/parse failure
+    (missing, malformed, undecodable, or pathologically nested input)."""
+    resource = _packaged_resource(name)
     try:
-        return json.loads((_content_dir() / name).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        if resource is not None:
+            text = resource.read_text(encoding="utf-8")
+        else:
+            text = _repo_content_file(name).read_text(encoding="utf-8")
+        return json.loads(text)
+    except (OSError, ValueError, RecursionError):
         return None
 
 
