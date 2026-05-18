@@ -12,6 +12,7 @@ from collections.abc import Callable, Sequence
 
 import questionary
 from rich.console import Console
+from rich.text import Text
 
 from henry_castillo import render
 from henry_castillo.content import Profile, Project
@@ -19,6 +20,7 @@ from henry_castillo.content import Profile, Project
 _MENU = [name for name, _ in render.SECTIONS]
 _LAB_LOCKED = "Lab (locked)"
 _QUIT = "Quit"
+_SUBSTACK = "Substack"
 
 SelectFn = Callable[[str, list[str]], str | None]
 OpenUrlFn = Callable[[str], None]
@@ -55,15 +57,18 @@ def run(
             return
         if choice == _LAB_LOCKED:
             console.print(
-                "[dim]Lab is locked — install the optional extra: "
-                "`uvx --with 'henry-castillo[lab]' henry-castillo lab`[/dim]"
+                Text(
+                    "Lab is locked — interactive ML experiments ship later as the "
+                    "optional henry-castillo[lab] extra.",
+                    style="dim",
+                )
             )
             continue
         renderer = sections.get(choice)
         if renderer is None:
             continue
         console.print(renderer(profile, project_list))
-        if choice == "Substack":
+        if choice == _SUBSTACK:
             url = render.substack_url(profile)
             if url is not None:
                 open_url(url)

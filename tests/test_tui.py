@@ -132,3 +132,68 @@ def test_run_uses_real_defaults_when_not_injected(monkeypatch):
     console, buf = _console()
     tui.run(PROFILE, PROJECTS, console=console)
     assert "Henry Castillo" in buf.getvalue()
+
+
+def test_lab_locked_message_renders_brackets_literally():
+    console, buf = _console()
+    seq = iter(["Lab (locked)", None])
+    tui.run(
+        PROFILE,
+        PROJECTS,
+        console=console,
+        select=lambda *_a, **_k: next(seq),
+        open_url=lambda _u: None,
+    )
+    out = buf.getvalue()
+    assert "locked" in out.lower()
+    assert "henry-castillo[lab]" in out  # [lab] not eaten by rich markup
+
+
+def test_loop_renders_selected_then_quits_banner_once():
+    console, buf = _console()
+    seq = iter(["About", "Projects", None])  # None => quit
+    tui.run(
+        PROFILE,
+        PROJECTS,
+        console=console,
+        select=lambda *_a, **_k: next(seq),
+        open_url=lambda _u: None,
+    )
+    out = buf.getvalue()
+    assert out.count("Henry Castillo") == 1  # banner printed once, not per-iteration
+
+
+def test_non_substack_section_does_not_open():
+    console, _ = _console()
+    opened: list[str] = []
+    seq = iter(["About", None])
+    tui.run(
+        PROFILE,
+        PROJECTS,
+        console=console,
+        select=lambda *_a, **_k: next(seq),
+        open_url=opened.append,
+    )
+    assert opened == []
+
+
+def test_run_open_url_defaults_to_webbrowser(monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(tui.webbrowser, "open", lambda u: calls.append(u) or True)
+    console, _ = _console()
+    seq = iter(["Substack", None])
+    tui.run(PROFILE, PROJECTS, console=console, select=lambda *_a, **_k: next(seq))
+    assert calls == ["https://s.substack.com"]
+
+
+def test_menu_order_passed_to_select():
+    console, _ = _console()
+    captured: list[list[str]] = []
+
+    def sel(_message, choices):
+        captured.append(list(choices))
+
+    tui.run(PROFILE, PROJECTS, console=console, select=sel, open_url=lambda _u: None)
+    assert captured == [
+        ["About", "Projects", "Résumé", "Contact", "Substack", "Lab (locked)", "Quit"]
+    ]
