@@ -8,7 +8,6 @@ import shutil
 import subprocess
 import sys
 import time
-import urllib.error
 import urllib.request
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -43,11 +42,13 @@ def fetch_latest_version(timeout: float = 2.0, *, url: str = PYPI_URL) -> str | 
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310
             data = json.load(resp)
+        if not isinstance(data, dict):
+            return None
         v = data["info"]["version"]
         if not isinstance(v, str):
             return None
         return v
-    except (urllib.error.URLError, OSError, ValueError, KeyError):
+    except (OSError, ValueError, KeyError):
         return None
 
 

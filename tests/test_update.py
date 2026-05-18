@@ -149,6 +149,32 @@ def test_fetch_latest_version_missing_version_key_returns_none(monkeypatch):
     assert update.fetch_latest_version(url="https://example/x") is None
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"[]",
+        b'"x"',
+        b"5",
+        b"null",
+        b"3.14",
+        b"[1,2,3]",
+    ],
+)
+def test_fetch_latest_version_non_dict_body_returns_none(body, monkeypatch):
+    """CLI-crash regression: a valid-JSON-but-non-dict PyPI body must yield
+    None, not raise.
+
+    Before the fix, ``data["info"]`` was indexed unconditionally; a JSON
+    array/string/number/null body raised an uncaught ``TypeError`` that
+    propagated out of ``fetch_latest_version`` (the ``except`` tuple did not
+    catch ``TypeError``), crashing the CLI's background update check.
+    """
+    monkeypatch.setattr(
+        update.urllib.request, "urlopen", lambda *a, **k: _fake_resp(body)
+    )
+    assert update.fetch_latest_version(url="https://x") is None
+
+
 @pytest.mark.parametrize("bad_version", [1.5, 123, None, [1, 2, 3], {}])
 def test_fetch_latest_version_rejects_non_string(bad_version, monkeypatch):
     """Bug 2 regression: a non-string PyPI version must yield None.
