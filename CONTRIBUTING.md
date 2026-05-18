@@ -63,6 +63,17 @@ Publisher: PyPI → project → Publishing → add GitHub publisher with
 owner `d0rbu`, repo `d0rbu`, workflow `release.yml`, environment `pypi`.
 Until then, use `workflow_dispatch` with `dry_run=true` to rehearse.
 
+### Content and gated first release
+
+The CLI is content-driven from `content/*.json` (single source of truth, also
+consumed by the website in Milestone 3). The committed values are a
+GitHub-derived **draft**: edit `content/profile.json` and
+`content/projects.json` to set your real profile, projects, and résumé, and in
+particular set your real Substack URL in `links.substack` (it ships blank) and
+replace the `DRAFT —` placeholders in the résumé/about. The first PyPI release
+is gated on (a) confirming that content and (b) the one-time Trusted Publishing
+setup described above; then push a `vX.Y.Z` tag.
+
 ### Action pinning policy
 
 **Every** GitHub Action is pinned to a full 40-hex commit SHA with a trailing
