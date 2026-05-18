@@ -25,6 +25,9 @@ def test_version_is_pep440_parseable():
 
 def test_main_returns_zero_and_prints_name(capsys):
     rc = main([])
-    out = capsys.readouterr().out
+    out, err = capsys.readouterr()
     assert rc == 0
-    assert out.splitlines()[0] == f"henry-castillo {henry_castillo.__version__}"
+    assert err == ""
+    assert "About" in out
+    assert "Projects" in out
+    assert "A new release" not in out
