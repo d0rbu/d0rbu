@@ -75,7 +75,11 @@ def _fake_resp(body: bytes):
         def __exit__(self, *a):
             return False
 
-        def read(self):
+        def read(self, *_a):
+            # Accept (and ignore) an optional size arg: production now calls
+            # ``resp.read(_MAX_PYPI_BYTES + 1)`` to cap the buffered body.
+            # Returning the (small) test body verbatim is correct -- the cap
+            # only rejects bodies strictly larger than the limit.
             return body
 
     return FakeResp()
@@ -161,18 +165,62 @@ def test_fetch_latest_version_missing_version_key_returns_none(monkeypatch):
     ],
 )
 def test_fetch_latest_version_non_dict_body_returns_none(body, monkeypatch):
-    """CLI-crash regression: a valid-JSON-but-non-dict PyPI body must yield
-    None, not raise.
+    """CLI-crash regression: a valid-JSON-but-non-**top-level**-dict PyPI body
+    must yield None, not raise.
 
-    Before the fix, ``data["info"]`` was indexed unconditionally; a JSON
-    array/string/number/null body raised an uncaught ``TypeError`` that
-    propagated out of ``fetch_latest_version`` (the ``except`` tuple did not
-    catch ``TypeError``), crashing the CLI's background update check.
+    This covers the *top-level* ``data`` guard only (the whole body is a JSON
+    array/string/number/bool/null). Before the top-level
+    ``isinstance(data, dict)`` guard, ``data["info"]`` was indexed
+    unconditionally and a non-dict top-level body raised an uncaught
+    ``TypeError`` that propagated out of ``fetch_latest_version`` (the
+    ``except`` tuple did not catch ``TypeError``), crashing the CLI's
+    background update check. The *nested* case (``data`` is a dict but
+    ``data["info"]`` is not) is covered separately by
+    ``test_fetch_latest_version_info_not_dict_returns_none``.
     """
     monkeypatch.setattr(
         update.urllib.request, "urlopen", lambda *a, **k: _fake_resp(body)
     )
     assert update.fetch_latest_version(url="https://x") is None
+
+
+@pytest.mark.parametrize("x", [None, 0, 1.5, True, "s", [1, 2, 3]])
+def test_fetch_latest_version_info_not_dict_returns_none(x, monkeypatch):
+    """FIX 1 regression: ``{"info": <non-dict>}`` must yield None, not raise.
+
+    The earlier fix only guarded the *top-level* ``data``. A body whose
+    ``info`` value is not a dict (``null``/number/bool/string/array) still
+    reached ``data["info"]["version"]``, which raises a ``TypeError`` for
+    ``None``/``int``/``float``/``bool``/``str`` (or worse, silently indexes a
+    list). ``TypeError`` is NOT in the ``except (OSError, ValueError,
+    KeyError)`` tuple, so it propagated through ``check_for_update`` and
+    crashed the CLI on every interactive run / ``--check-update``.
+    """
+    body = json.dumps({"info": x}).encode()
+    monkeypatch.setattr(
+        update.urllib.request, "urlopen", lambda *a, **k: _fake_resp(body)
+    )
+    assert update.fetch_latest_version(url="https://x") is None
+
+
+def test_check_for_update_info_null_body_does_not_raise(tmp_path: Path, monkeypatch):
+    """End-to-end FIX 1: the DEFAULT fetcher path with a ``{"info": null}``
+    body must return None, NOT raise.
+
+    Drives the real ``fetch_latest_version`` (default fetcher, not stubbed)
+    via a fake ``urlopen`` so a regression of the nested-``info`` guard
+    surfaces here as an uncaught ``TypeError`` out of ``check_for_update``.
+    """
+    monkeypatch.setattr(update, "current_version", lambda: "0.0.0")
+    monkeypatch.setattr(
+        update.urllib.request,
+        "urlopen",
+        lambda *a, **k: _fake_resp(b'{"info": null}'),
+    )
+    got = update.check_for_update(
+        now=1000.0, cache_path=tmp_path / "u.json", interval=100
+    )
+    assert got is None
 
 
 @pytest.mark.parametrize("bad_version", [1.5, 123, None, [1, 2, 3], {}])
@@ -188,6 +236,65 @@ def test_fetch_latest_version_rejects_non_string(bad_version, monkeypatch):
         update.urllib.request, "urlopen", lambda *a, **k: _fake_resp(body)
     )
     assert update.fetch_latest_version(url="https://example/x") is None
+
+
+def test_fetch_latest_version_oversize_body_returns_none(monkeypatch):
+    """FIX 5 regression: a body larger than ``_MAX_PYPI_BYTES`` must yield
+    None WITHOUT buffering/parsing it (memory-DoS guard).
+
+    The fake ``resp.read(n)`` honors the requested size and returns one byte
+    past the cap, exactly as a real socket read of an over-large stream
+    would, so the length check trips and we never hand >2MiB to
+    ``json.loads``.
+    """
+    over = update._MAX_PYPI_BYTES
+
+    class _Big:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n=None):
+            # Real urllib resp.read(n) returns at most n bytes. We return
+            # exactly n (= cap + 1) bytes of valid-prefix JSON so the only
+            # thing that can reject it is the size cap, not a parse error.
+            assert n == over + 1
+            return b'{"info": {"version": "9.9.9"}}' + b" " * (over + 1)
+
+    monkeypatch.setattr(update.urllib.request, "urlopen", lambda *a, **k: _Big())
+    assert update.fetch_latest_version(url="https://x") is None
+
+
+def test_fetch_latest_version_body_exactly_at_cap_still_parses(monkeypatch):
+    """A body whose length is exactly ``_MAX_PYPI_BYTES`` is still parsed
+    (the cap rejects only strictly-larger bodies)."""
+    payload = json.dumps({"info": {"version": "1.2.3"}}).encode()
+    pad = update._MAX_PYPI_BYTES - len(payload)
+    # Valid JSON padded with leading whitespace to land exactly on the cap.
+    body = b" " * pad + payload
+    assert len(body) == update._MAX_PYPI_BYTES
+    monkeypatch.setattr(
+        update.urllib.request, "urlopen", lambda *a, **k: _fake_resp(body)
+    )
+    assert update.fetch_latest_version(url="https://x") == "1.2.3"
+
+
+def test_fetch_latest_version_small_body_still_returns_version(monkeypatch):
+    """FIX 5 must not regress the happy path: a normal small body still
+    yields the version (the read-with-size arg returns the full small body)."""
+    monkeypatch.setattr(
+        update.urllib.request,
+        "urlopen",
+        lambda *a, **k: _fake_resp(b'{"info": {"version": "4.5.6"}}'),
+    )
+    assert update.fetch_latest_version(url="https://x") == "4.5.6"
+
+
+def test_max_pypi_bytes_is_two_mib():
+    """Pin the cap constant so a mutation away from 2 MiB is caught."""
+    assert update._MAX_PYPI_BYTES == 2 * 1024 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -595,16 +702,74 @@ def test_perform_update_oserror_returns_one_and_prints(monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
-# update_notice — exact full string
+# update_notice — exact full string (the emitted version is PEP 440 NORMALIZED)
 # ---------------------------------------------------------------------------
 
 
 def test_update_notice_exact_string(monkeypatch):
+    """Exact contract: the message embeds the PEP 440 *normalized* version.
+
+    ``"9.9.9"`` is already normalized, so the string is unchanged; this
+    pins the exact format. The normalization itself (stripping trailing
+    control/whitespace bytes) is asserted by the parametrized test below.
+    """
     monkeypatch.setattr(update, "current_version", lambda: "0.1.0")
     assert update.update_notice("9.9.9") == (
         "A new release of henry-castillo is available: 0.1.0 -> 9.9.9. "
         "Run `henry-castillo --update` to upgrade."
     )
+
+
+@pytest.mark.parametrize(
+    ("hostile", "normalized"),
+    [
+        ("999.0.0\r", "999.0.0"),
+        ("1.0.0\x0c", "1.0.0"),
+        ("2.3.4\n", "2.3.4"),
+        ("5.6.7\x0b", "5.6.7"),
+        ("  8.9.10\t", "8.9.10"),
+        # packaging normalizes case/format too: this proves it is the
+        # *normalized* str(Version(...)), not a mere whitespace strip.
+        ("1.0.0RC1\r\n", "1.0.0rc1"),
+    ],
+)
+def test_update_notice_normalizes_hostile_version(hostile, normalized, monkeypatch):
+    """FIX 4 regression: a poisoned ``latest`` with trailing control/whitespace
+    bytes must NOT garble the terminal line.
+
+    ``packaging.Version`` tolerates trailing ``\\r``/``\\n``/``\\x0c``/
+    ``\\x0b``/whitespace, so the raw string would emit those control bytes
+    into the user's TTY. The notice must instead contain the PEP 440
+    *normalized* form and no character from ``str.isspace`` / the C0
+    control range.
+    """
+    monkeypatch.setattr(update, "current_version", lambda: "0.1.0")
+    msg = update.update_notice(hostile)
+    expected = (
+        f"A new release of henry-castillo is available: 0.1.0 -> {normalized}. "
+        f"Run `henry-castillo --update` to upgrade."
+    )
+    assert msg == expected
+    # No control / whitespace-class byte anywhere in the rendered notice
+    # except the single ASCII spaces that are part of the literal template.
+    assert "\r" not in msg
+    assert "\n" not in msg
+    assert "\x0c" not in msg
+    assert "\x0b" not in msg
+    assert "\t" not in msg
+    assert not any(ord(c) < 0x20 for c in msg)
+
+
+def test_update_notice_unparseable_version_falls_back_to_stripped(monkeypatch):
+    """Defensive fallback: if ``Version()`` somehow cannot parse ``latest``
+    (``check_for_update`` should never return such a value, but be safe), the
+    notice still emits a whitespace-stripped form -- never raw control bytes.
+    """
+    monkeypatch.setattr(update, "current_version", lambda: "0.1.0")
+    msg = update.update_notice("not a version\r\n")
+    assert "\r" not in msg
+    assert "\n" not in msg
+    assert "notaversion" in msg
 
 
 # ---------------------------------------------------------------------------

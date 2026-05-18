@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -17,6 +18,10 @@ from packaging.version import InvalidVersion, Version
 PACKAGE = "henry-castillo"
 PYPI_URL = f"https://pypi.org/pypi/{PACKAGE}/json"
 CHECK_INTERVAL_SECONDS = 60 * 60 * 24
+# Hard cap on the PyPI JSON body we will buffer + parse. The metadata we need
+# (info.version) is a few hundred bytes; a hostile/poisoned endpoint streaming
+# an unbounded body must not be able to exhaust memory (DoS) before json.loads.
+_MAX_PYPI_BYTES = 2 * 1024 * 1024
 
 
 def current_version() -> str:
@@ -41,10 +46,21 @@ def fetch_latest_version(timeout: float = 2.0, *, url: str = PYPI_URL) -> str | 
     """Return the latest version string from PyPI, or None on any failure."""
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310
-            data = json.load(resp)
+            # Cap the buffered body: read one byte past the limit so an
+            # over-large (hostile/poisoned) response is detected and rejected
+            # without parsing it. json.loads raises ValueError on bad/non-JSON
+            # bytes and a non-UTF-8 body raises UnicodeDecodeError (a
+            # ValueError subclass) -- both already covered by the except below.
+            raw = resp.read(_MAX_PYPI_BYTES + 1)
+        if len(raw) > _MAX_PYPI_BYTES:
+            return None
+        data = json.loads(raw)
         if not isinstance(data, dict):
             return None
-        v = data["info"]["version"]
+        info = data.get("info")
+        if not isinstance(info, dict):
+            return None
+        v = info.get("version")
         if not isinstance(v, str):
             return None
         return v
@@ -107,10 +123,23 @@ def check_for_update(
 
 
 def update_notice(latest: str) -> str:
-    """Human-facing one-liner shown when a newer release exists."""
+    """Human-facing one-liner shown when a newer release exists.
+
+    ``latest`` is emitted in its PEP 440 *normalized* form. ``packaging``
+    tolerates trailing whitespace/control characters (``\\r``/``\\n``/
+    ``\\x0c``/``\\x0b``) in a version string, so a hostile/poisoned ``latest``
+    could otherwise garble the user's terminal line. ``check_for_update``
+    only returns ``latest`` after ``is_outdated`` parsed it, so
+    ``Version(latest)`` succeeds here; if it somehow does not, fall back to a
+    whitespace-stripped form rather than emitting raw control bytes.
+    """
+    try:
+        safe = str(Version(latest))
+    except InvalidVersion:
+        safe = re.sub(r"\s+", "", latest)
     return (
         f"A new release of henry-castillo is available: "
-        f"{current_version()} -> {latest}. "
+        f"{current_version()} -> {safe}. "
         f"Run `henry-castillo --update` to upgrade."
     )
 

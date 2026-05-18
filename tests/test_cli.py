@@ -334,7 +334,10 @@ def test_maybe_notice_under_tty_non_dict_body_prints_no_notice(
         def __exit__(self, *a):
             return False
 
-        def read(self):
+        def read(self, *_a):
+            # Accept + ignore the size arg: production caps the body via
+            # ``resp.read(_MAX_PYPI_BYTES + 1)``; the small body is returned
+            # verbatim.
             return b"null"
 
     monkeypatch.setattr(up.urllib.request, "urlopen", lambda *a, **k: _Resp())
@@ -343,6 +346,41 @@ def test_maybe_notice_under_tty_non_dict_body_prints_no_notice(
     assert rc == 0
     assert out == _DEFAULT_STDOUT
     assert "A new release" not in out
+
+
+def test_main_under_tty_info_null_body_rc0_no_notice_no_traceback(
+    tmp_path, monkeypatch, capsys
+):
+    """End-to-end FIX 1 through the CLI: a ``{"info": null}`` PyPI body under
+    an interactive TTY with the update check enabled must return rc 0, print
+    NO update notice, and NOT raise a traceback.
+
+    ``check_for_update``/``fetch_latest_version`` are NOT stubbed; only
+    ``urlopen``. A regression of the nested-``info`` guard would surface here
+    as an uncaught ``TypeError`` crashing ``main([])`` on every interactive
+    run.
+    """
+    monkeypatch.delenv("HENRY_CASTILLO_NO_UPDATE_CHECK", raising=False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr(up, "cache_path", lambda: tmp_path / "u.json")
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, *a):
+            return b'{"info": null}'
+
+    monkeypatch.setattr(up.urllib.request, "urlopen", lambda *a, **k: _Resp())
+    rc = main([])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert out == _DEFAULT_STDOUT
+    assert "A new release" not in out
+    assert "Traceback" not in out
 
 
 def test_maybe_notice_guard_unit_no_update_check(monkeypatch):
