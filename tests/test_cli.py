@@ -596,3 +596,20 @@ def test_render_section_unknown_section_is_noop(monkeypatch):
     rc = _m._render_section(args, console)
     assert rc == 0
     assert buf.getvalue() == ""
+
+
+def test_subcommand_substack_without_url_does_not_open(monkeypatch):
+    monkeypatch.setattr(_m.content, "load_profile", Profile)
+    opened: list[str] = []
+    monkeypatch.setattr(_m, "_open_url", opened.append)
+    rc, out = _run(["substack"], monkeypatch)
+    assert rc == 0 and opened == []
+    assert "Substack" in out
+
+
+def test_subcommand_on_tty_emits_update_notice(monkeypatch):
+    monkeypatch.setattr(up, "check_for_update", lambda **_k: "9.9.9")
+    rc, out = _run(["about"], monkeypatch, tty=True)
+    assert rc == 0
+    assert "About" in out
+    assert _EXPECTED_NOTICE in out
