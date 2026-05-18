@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import unicodedata
 import webbrowser
 
 from rich.console import Console
@@ -30,6 +31,16 @@ _SEC_SUBSTACK = "substack"
 def _update_check_disabled_by_env() -> bool:
     val = os.environ.get("HENRY_CASTILLO_NO_UPDATE_CHECK")
     return val is not None and val.strip().lower() not in _FALSEY_ENV
+
+
+def _harden_stream(stream: object) -> None:
+    """Degrade un-encodable characters instead of crashing when the
+    process stdout/stderr uses a restrictive codec (e.g.
+    ``PYTHONIOENCODING=ascii`` in CI/Docker). The test harness swaps in a
+    ``StringIO`` (no ``reconfigure``) — silently skipped there."""
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(errors="replace")
 
 
 def _open_url(url: str) -> None:
@@ -121,6 +132,9 @@ def _render_section(args: argparse.Namespace, console: Console) -> int:
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
+    _harden_stream(sys.stdout)
+    _harden_stream(sys.stderr)
+    argv = [unicodedata.normalize("NFC", a) for a in argv]
     args = _build_parser().parse_args(argv)
 
     if args.version:

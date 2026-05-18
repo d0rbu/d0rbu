@@ -109,3 +109,32 @@ def test_update_end_to_end_via_path_shim(tmp_path):
     )
     assert r.returncode == 7
     assert "Running: uv tool upgrade henry-castillo" in r.stdout
+
+
+def test_ascii_io_encoding_does_not_crash():
+    """Under PYTHONIOENCODING=ascii the CLI must degrade, not traceback."""
+    env = {
+        **os.environ,
+        "PYTHONIOENCODING": "ascii",
+        "HENRY_CASTILLO_NO_UPDATE_CHECK": "1",
+    }
+    r = subprocess.run(
+        [sys.executable, "-m", "henry_castillo", "about"],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert r.returncode == 0
+    assert "UnicodeEncodeError" not in r.stderr
+    assert "Traceback" not in r.stderr
+
+    r2 = subprocess.run(
+        [sys.executable, "-m", "henry_castillo"],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+        stdin=subprocess.DEVNULL,
+    )
+    assert r2.returncode == 0 and "Traceback" not in r2.stderr

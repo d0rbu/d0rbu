@@ -8,6 +8,7 @@ pinned here. No real network (see tests/conftest.py).
 import argparse
 import importlib.metadata
 import io
+import unicodedata
 import urllib.error
 
 import pytest
@@ -17,7 +18,12 @@ from rich.console import Console
 import henry_castillo.__main__ as _m
 import henry_castillo.update as up
 from henry_castillo import __version__
-from henry_castillo.__main__ import _maybe_notice, _update_check_disabled_by_env, main
+from henry_castillo.__main__ import (
+    _harden_stream,
+    _maybe_notice,
+    _update_check_disabled_by_env,
+    main,
+)
 from henry_castillo.content import Profile, Resume
 
 _EXPECTED_NOTICE = (
@@ -614,3 +620,28 @@ def test_subcommand_on_tty_emits_update_notice(monkeypatch):
     assert rc == 0
     assert "About" in out
     assert _EXPECTED_NOTICE in out
+
+
+# ---------------------------------------------------------------------------
+# encoding hardening + NFC argv
+# ---------------------------------------------------------------------------
+
+
+def test_harden_stream_makes_unencodable_writes_not_raise():
+    raw = io.BytesIO()
+    w = io.TextIOWrapper(raw, encoding="ascii", newline="")
+    _harden_stream(w)
+    w.write("box ─ em — dot · é")  # would raise UnicodeEncodeError pre-fix
+    w.flush()
+    assert b"?" in raw.getvalue()  # degraded, not crashed
+
+
+def test_harden_stream_noop_on_stringio():
+    _harden_stream(io.StringIO())  # no reconfigure attr -> silent no-op
+
+
+def test_resume_accent_alias_accepts_nfd_argv(monkeypatch):
+    nfd = unicodedata.normalize("NFD", "résumé")
+    assert nfd != "résumé"  # decomposed form differs
+    rc, out = _run([nfd], monkeypatch)
+    assert rc == 0 and "Résumé" in out
