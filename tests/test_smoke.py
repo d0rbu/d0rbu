@@ -1,4 +1,10 @@
-import subprocess
+"""In-process smoke checks. Subprocess/end-to-end checks live in
+tests/test_integration.py.
+"""
+
+import importlib.metadata
+
+from packaging.version import Version
 
 import henry_castillo
 from henry_castillo.__main__ import main
@@ -9,22 +15,16 @@ def test_version_is_nonempty_string():
     assert henry_castillo.__version__
 
 
+def test_version_matches_distribution_metadata():
+    assert henry_castillo.__version__ == importlib.metadata.version("henry-castillo")
+
+
+def test_version_is_pep440_parseable():
+    assert str(Version(henry_castillo.__version__)) == henry_castillo.__version__
+
+
 def test_main_returns_zero_and_prints_name(capsys):
     rc = main([])
     out = capsys.readouterr().out
     assert rc == 0
-    assert "henry-castillo" in out
-
-
-def test_console_entrypoint_runs():
-    result = subprocess.run(
-        ["henry-castillo"], capture_output=True, text=True
-    )
-    assert result.returncode == 0
-    assert "henry-castillo" in result.stdout
-
-
-def test_alias_entrypoint_runs():
-    result = subprocess.run(["d0rbu"], capture_output=True, text=True)
-    assert result.returncode == 0
-    assert "henry-castillo" in result.stdout
+    assert out.splitlines()[0] == f"henry-castillo {henry_castillo.__version__}"

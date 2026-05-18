@@ -1,23 +1,94 @@
-"""Minimal CLI entrypoint stub.
+"""CLI entrypoint.
 
-Real functionality (interactive card + subcommands) arrives in Milestone 2.
-This stub exists so the package and all six console aliases are verifiably
-wired by Milestone 1.
+Milestone 1.5 wires version reporting and auto-update. Real interactive
+card + content subcommands arrive in Milestone 2; the default run is still
+an intentional placeholder.
 """
 
+from __future__ import annotations
+
+import argparse
+import os
 import sys
 
 from henry_castillo import __version__
+from henry_castillo import update as _update
+
+_BANNER = "henry-castillo {version}"
+
+_FALSEY_ENV = {"", "0", "false", "no", "off"}
+
+
+def _update_check_disabled_by_env() -> bool:
+    val = os.environ.get("HENRY_CASTILLO_NO_UPDATE_CHECK")
+    return val is not None and val.strip().lower() not in _FALSEY_ENV
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="henry-castillo",
+        description="Henry Castillo's personal CLI business card.",
+        allow_abbrev=False,
+    )
+    parser.add_argument("--version", action="store_true", help="print version and exit")
+    parser.add_argument(
+        "--check-update",
+        action="store_true",
+        help="check whether a newer release exists and exit",
+    )
+    parser.add_argument(
+        "--update",
+        action="store_true",
+        help="upgrade henry-castillo to the latest release",
+    )
+    parser.add_argument(
+        "--no-update-check",
+        action="store_true",
+        help="skip the background update check on this run",
+    )
+    return parser
+
+
+def _maybe_notice(args: argparse.Namespace) -> None:
+    """Print a one-line update notice, only when interactive and allowed."""
+    if args.no_update_check or _update_check_disabled_by_env():
+        return
+    if not sys.stdout.isatty():  # never in pipes/CI/tests
+        return
+    latest = _update.check_for_update()
+    if latest:
+        print(_update.update_notice(latest))
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Print a friendly placeholder and exit 0."""
+    """Entry point for all six console aliases."""
     if argv is None:
         argv = sys.argv[1:]
-    print(f"henry-castillo {__version__}")
+    args = _build_parser().parse_args(argv)
+
+    if args.version:
+        print(_BANNER.format(version=__version__))
+        return 0
+
+    if args.update:
+        return _update.perform_update()
+
+    if args.check_update:
+        latest = _update.check_for_update()
+        if latest:
+            print(
+                f"henry-castillo {__version__}: a newer release {latest} "
+                f"is available. Run `henry-castillo --update`."
+            )
+        else:
+            print(f"henry-castillo {__version__} is up to date.")
+        return 0
+
+    print(_BANNER.format(version=__version__))
     print("Personal website + CLI business card — scaffold.")
     print("CLI features land in a later release.")
     print("Repo: https://github.com/d0rbu/d0rbu")
+    _maybe_notice(args)
     return 0
 
 

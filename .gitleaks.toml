@@ -1,0 +1,5 @@
+[extend]
+useDefault = true
+[allowlist]
+description = "Intentional public alias, not a secret"
+regexes = ['''secret-string-lol''']
