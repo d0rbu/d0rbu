@@ -7,7 +7,6 @@ the throttled TTY-only offline-safe notice) is preserved from Milestone 1.5.
 from __future__ import annotations
 
 import argparse
-import contextlib
 import os
 import sys
 import webbrowser
@@ -128,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"henry-castillo {__version__} is up to date.")
         return 0
 
-    console = Console(highlight=False)
+    console = Console()
     if args.section is not None:
         rc = _render_section(args, console)
         _maybe_notice(args)
@@ -137,8 +136,7 @@ def main(argv: list[str] | None = None) -> int:
     profile = content.load_profile()
     projects = content.load_projects()
     if sys.stdout.isatty():
-        with contextlib.suppress(EOFError, RuntimeError):
-            tui.run(profile, projects, console=console)
+        tui.run(profile, projects, console=console)
         _maybe_notice(args)
     else:
         render.render_all(console, profile, projects)

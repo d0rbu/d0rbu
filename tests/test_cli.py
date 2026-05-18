@@ -189,6 +189,7 @@ def test_env_contract_drives_check_for_update(value, suppressed, monkeypatch):
     called = []
     monkeypatch.setenv("HENRY_CASTILLO_NO_UPDATE_CHECK", value)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr(_m.tui, "run", lambda *_a, **_k: None)
     monkeypatch.setattr(up, "check_for_update", lambda **k: called.append(1) or None)
     rc = main([])
     assert rc == 0
@@ -199,6 +200,7 @@ def test_env_contract_unset_not_suppressed(monkeypatch):
     called = []
     monkeypatch.delenv("HENRY_CASTILLO_NO_UPDATE_CHECK", raising=False)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr(_m.tui, "run", lambda *_a, **_k: None)
     monkeypatch.setattr(up, "check_for_update", lambda **k: called.append(1) or None)
     assert main([]) == 0
     assert called == [1]
@@ -237,15 +239,17 @@ def test_maybe_notice_positive_path_exact_real_notice(monkeypatch, capsys):
     monkeypatch.setattr(up, "check_for_update", lambda **k: "9.9.9")
     monkeypatch.setattr(up, "current_version", lambda: __version__)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr(_m.tui, "run", lambda *_a, **_k: None)
     rc = main([])
     out = capsys.readouterr().out
     assert rc == 0
-    assert _EXPECTED_NOTICE in out
+    assert out == _EXPECTED_NOTICE
 
 
 def test_maybe_notice_no_update_available_prints_nothing_extra(monkeypatch, capsys):
     monkeypatch.setattr(up, "check_for_update", lambda **k: None)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr(_m.tui, "run", lambda *_a, **_k: None)
     rc = main([])
     out = capsys.readouterr().out
     assert rc == 0
@@ -256,6 +260,7 @@ def test_maybe_notice_suppressed_with_no_update_check_flag(monkeypatch, capsys):
     called = []
     monkeypatch.setattr(up, "check_for_update", lambda **k: called.append(1) or "9.9.9")
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr(_m.tui, "run", lambda *_a, **_k: None)
     rc = main(["--no-update-check"])
     out = capsys.readouterr().out
     assert rc == 0
@@ -267,10 +272,13 @@ def test_maybe_notice_suppressed_by_env_var(monkeypatch, capsys):
     called = []
     monkeypatch.setattr(up, "check_for_update", lambda **k: called.append(1) or "9.9.9")
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr(_m.tui, "run", lambda *_a, **_k: None)
     monkeypatch.setenv("HENRY_CASTILLO_NO_UPDATE_CHECK", "1")
     rc = main([])
+    out = capsys.readouterr().out
     assert rc == 0
     assert called == []
+    assert "A new release" not in out
 
 
 def test_maybe_notice_suppressed_when_not_tty_and_no_network(monkeypatch, capsys):
@@ -298,6 +306,7 @@ def test_maybe_notice_offline_under_tty_does_not_crash_and_prints_no_notice(
     """
     monkeypatch.delenv("HENRY_CASTILLO_NO_UPDATE_CHECK", raising=False)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr(_m.tui, "run", lambda *_a, **_k: None)
     monkeypatch.setattr(up, "cache_path", lambda: tmp_path / "u.json")
 
     def boom(*a, **k):
@@ -324,6 +333,7 @@ def test_maybe_notice_under_tty_non_dict_body_prints_no_notice(
     """
     monkeypatch.delenv("HENRY_CASTILLO_NO_UPDATE_CHECK", raising=False)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr(_m.tui, "run", lambda *_a, **_k: None)
     monkeypatch.setattr(up, "cache_path", lambda: tmp_path / "u.json")
 
     class _Resp:
@@ -360,6 +370,7 @@ def test_main_under_tty_info_null_body_rc0_no_notice_no_traceback(
     """
     monkeypatch.delenv("HENRY_CASTILLO_NO_UPDATE_CHECK", raising=False)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr(_m.tui, "run", lambda *_a, **_k: None)
     monkeypatch.setattr(up, "cache_path", lambda: tmp_path / "u.json")
 
     class _Resp:
@@ -534,11 +545,11 @@ def test_default_tty_runs_interactive_loop(monkeypatch):
 
     def fake_run(profile, projects, *, console, **kw):
         called["yes"] = True
-        console.print("[INTERACTIVE]")
+        console.print("INTERACTIVE_CALLED")
 
     monkeypatch.setattr(_m.tui, "run", fake_run)
     rc, out = _run([], monkeypatch, tty=True)
-    assert rc == 0 and called.get("yes") and "[INTERACTIVE]" in out
+    assert rc == 0 and called.get("yes") and "INTERACTIVE_CALLED" in out
 
 
 def test_subcommand_suppresses_notice_in_pipe(monkeypatch):
