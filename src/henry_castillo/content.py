@@ -9,6 +9,8 @@ returns empty defaults so the CLI degrades gracefully offline.
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
@@ -84,8 +86,31 @@ def _read_json(name: str) -> object:
         return None
 
 
+_CSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _sanitize(value: str) -> str:
+    """Strip ANSI CSI sequences and C0/C1 control characters (Unicode
+    category ``Cc``) except newline and tab, so terminal control/escape
+    sequences embedded in content can never reach the terminal."""
+    value = _CSI_RE.sub("", value)
+    return "".join(c for c in value if c in "\n\t" or unicodedata.category(c) != "Cc")
+
+
+def _sanitize_json(obj: object) -> object:
+    """Recursively sanitize every string inside an already-parsed JSON
+    value (bounded: json.loads has already enforced a recursion limit)."""
+    if isinstance(obj, str):
+        return _sanitize(obj)
+    if isinstance(obj, dict):
+        return {_sanitize_json(k): _sanitize_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_json(v) for v in obj]
+    return obj
+
+
 def _str(value: object) -> str:
-    return value if isinstance(value, str) else ""
+    return _sanitize(value) if isinstance(value, str) else ""
 
 
 def load_profile() -> Profile:
@@ -102,7 +127,7 @@ def load_profile() -> Profile:
     raw_links = d.get("links")
     links = (
         {
-            k: v
+            _sanitize(k): _sanitize(v)
             for k, v in raw_links.items()
             if isinstance(k, str) and isinstance(v, str)
         }
@@ -117,13 +142,27 @@ def load_profile() -> Profile:
         raw_hi = rd.get("highlights")
         resume = Resume(
             pdf=_str(rd.get("pdf")),
-            experience=[x for x in cast("list[object]", raw_exp) if isinstance(x, dict)]
+            experience=cast(
+                "list[dict]",
+                [
+                    _sanitize_json(x)
+                    for x in cast("list[object]", raw_exp)
+                    if isinstance(x, dict)
+                ],
+            )
             if isinstance(raw_exp, list)
             else [],
-            education=[x for x in cast("list[object]", raw_edu) if isinstance(x, dict)]
+            education=cast(
+                "list[dict]",
+                [
+                    _sanitize_json(x)
+                    for x in cast("list[object]", raw_edu)
+                    if isinstance(x, dict)
+                ],
+            )
             if isinstance(raw_edu, list)
             else [],
-            highlights=[str(x) for x in cast("list[object]", raw_hi)]
+            highlights=[_sanitize(str(x)) for x in cast("list[object]", raw_hi)]
             if isinstance(raw_hi, list)
             else [],
         )
@@ -155,7 +194,7 @@ def load_projects() -> list[Project]:
                 name=_str(it.get("name")),
                 blurb=_str(it.get("blurb")),
                 url=_str(it.get("url")),
-                tags=[t for t in raw_tags if isinstance(t, str)]
+                tags=[_sanitize(t) for t in raw_tags if isinstance(t, str)]
                 if isinstance(raw_tags, list)
                 else [],
             )

@@ -228,3 +228,57 @@ def test_real_repo_content_loads_and_is_coherent(monkeypatch):
         assert isinstance(proj, content.Project)
         assert proj.name
         assert isinstance(proj.tags, list)
+
+
+def test_control_chars_stripped_from_all_string_fields(tmp_path, monkeypatch):
+    evil = "a\x1b[31mRED\x1b[0m\x07b\x9bc"  # ESC seq, BEL, C1 CSI
+    _pkg(
+        monkeypatch,
+        tmp_path,
+        profile={
+            "name": evil,
+            "handle": evil,
+            "tagline": evil,
+            "about": "line1\nline2\ttabbed" + evil,  # \n and \t preserved
+            "contact": {"email": evil},
+            "links": {"git\x1bhub": "https://x/\x1b]0;pwn\x07"},
+            "resume": {
+                "pdf": evil,
+                "experience": [{"role": evil, "summary": ["nested" + evil]}],
+                "education": [{"school": evil}],
+                "highlights": ["h" + evil, 1],
+            },
+        },
+        projects=[{"name": evil, "blurb": evil, "url": evil, "tags": ["t" + evil]}],
+    )
+    p = content.load_profile()
+    blob = repr(
+        (
+            p.name,
+            p.handle,
+            p.tagline,
+            p.about,
+            p.email,
+            p.links,
+            p.resume.pdf,
+            p.resume.experience,
+            p.resume.education,
+            p.resume.highlights,
+        )
+    )
+    assert "\x1b" not in blob and "\x07" not in blob and "\x9b" not in blob
+    assert p.name == "aRED" + "b" + "c"
+    assert "\n" in p.about and "\t" in p.about  # legitimate whitespace kept
+    assert p.links == {"github": "https://x/]0;pwn"}
+    assert p.resume.experience == [{"role": "aREDbc", "summary": ["nestedaREDbc"]}]
+    assert p.resume.highlights == ["haREDbc", "1"]
+    proj = content.load_projects()[0]
+    assert "\x1b" not in repr((proj.name, proj.blurb, proj.url, proj.tags))
+
+
+def test_sanitize_returns_str_and_strips_controls():
+    assert content._sanitize("a\x1bb\x00c\nd\te") == "abc\nd\te"
+    assert content._sanitize("plain") == "plain"
+    # _sanitize_json passthrough: non-str/dict/list values are returned as-is
+    assert content._sanitize_json(42) == 42
+    assert content._sanitize_json(None) is None
