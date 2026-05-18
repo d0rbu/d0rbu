@@ -33,8 +33,8 @@ def test_alias_bare_run(alias):
     r = subprocess.run([exe], capture_output=True, text=True, check=False)  # noqa: S603
     assert r.returncode == 0
     assert r.stderr == ""
-    assert "About" in r.stdout
-    assert "Projects" in r.stdout
+    for _title in ("About", "Projects", "Résumé", "Contact", "Substack"):
+        assert _title in r.stdout
     # The update notice must never appear: stdout is not a tty under
     # subprocess capture, proving the isatty offline guard end-to-end.
     assert "A new release" not in r.stdout

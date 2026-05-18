@@ -23,11 +23,11 @@ def test_version_is_pep440_parseable():
     assert str(Version(henry_castillo.__version__)) == henry_castillo.__version__
 
 
-def test_main_returns_zero_and_prints_name(capsys):
+def test_main_returns_zero_and_renders_card(capsys):
     rc = main([])
     out, err = capsys.readouterr()
     assert rc == 0
     assert err == ""
-    assert "About" in out
-    assert "Projects" in out
+    for _title in ("About", "Projects", "Résumé", "Contact", "Substack"):
+        assert _title in out
     assert "A new release" not in out
