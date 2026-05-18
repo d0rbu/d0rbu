@@ -56,10 +56,8 @@ def _content_dir() -> Path:
 
 
 def _read_json(name: str) -> object:
-    packaged = _packaged_content()
-    base = packaged if packaged.is_dir() else _content_dir()
     try:
-        return json.loads((base / name).read_text(encoding="utf-8"))
+        return json.loads((_content_dir() / name).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
 

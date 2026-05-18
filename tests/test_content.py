@@ -53,7 +53,11 @@ def test_load_profile_full(tmp_path, monkeypatch):
     monkeypatch.setattr(content, "_packaged_content", lambda: tmp_path / "_content")
     p = content.load_profile()
     assert (p.name, p.handle, p.tagline, p.about) == (
-        "Henry Castillo", "d0rbu", "ML / interpretability", "Bio.")
+        "Henry Castillo",
+        "d0rbu",
+        "ML / interpretability",
+        "Bio.",
+    )
     assert p.email == "a@b.c"
     assert p.links == {"github": "https://github.com/d0rbu"}
     assert p.resume.pdf == "r.pdf"
@@ -73,14 +77,17 @@ def test_load_profile_malformed_returns_empty(tmp_path, monkeypatch, blob):
 
 
 def test_load_profile_missing_file_returns_empty(tmp_path, monkeypatch):
-    (tmp_path / "_content").mkdir(parents=True)
-    monkeypatch.setattr(content, "_packaged_content", lambda: tmp_path / "_content")
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+    monkeypatch.setattr(content, "_content_dir", lambda: empty_dir)
     assert content.load_profile() == content.Profile()
 
 
 def test_load_profile_partial_and_bad_subtypes(tmp_path, monkeypatch):
-    _write(tmp_path, profile={"name": "N", "contact": "nope", "links": "nope",
-                              "resume": "nope"})
+    _write(
+        tmp_path,
+        profile={"name": "N", "contact": "nope", "links": "nope", "resume": "nope"},
+    )
     monkeypatch.setattr(content, "_packaged_content", lambda: tmp_path / "_content")
     p = content.load_profile()
     assert p.name == "N" and p.email == "" and p.links == {}
@@ -88,11 +95,15 @@ def test_load_profile_partial_and_bad_subtypes(tmp_path, monkeypatch):
 
 
 def test_load_projects(tmp_path, monkeypatch):
-    _write(tmp_path, projects=[
-        {"name": "A", "blurb": "b", "url": "u", "tags": ["t", 1]},
-        "garbage",
-        {"name": "B"},
-    ])
+    _write(
+        tmp_path,
+        profile={},
+        projects=[
+            {"name": "A", "blurb": "b", "url": "u", "tags": ["t", 1]},
+            "garbage",
+            {"name": "B"},
+        ],
+    )
     monkeypatch.setattr(content, "_packaged_content", lambda: tmp_path / "_content")
     ps = content.load_projects()
     assert [x.name for x in ps] == ["A", "B"]
@@ -104,6 +115,7 @@ def test_load_projects(tmp_path, monkeypatch):
 def test_load_projects_malformed_returns_empty_list(tmp_path, monkeypatch, blob):
     cdir = tmp_path / "_content"
     cdir.mkdir(parents=True)
+    (cdir / "profile.json").write_text("{}", encoding="utf-8")
     (cdir / "projects.json").write_text(blob, encoding="utf-8")
     monkeypatch.setattr(content, "_packaged_content", lambda: tmp_path / "_content")
     assert content.load_projects() == []
