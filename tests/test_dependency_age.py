@@ -15,6 +15,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -301,6 +302,74 @@ def test_parse_npm_lock_root_entry_never_returned():
     """The root ``""`` entry is never returned, even with a version."""
     obj = {"packages": {"": {"version": "1.2.3", "resolved": "https://r/x"}}}
     assert guard.parse_npm_lock(obj) == []
+
+
+# ---------------------------------------------------------------------------
+# _SEMVER_RE: must recognize the semver SHAPE (incl. combined prerelease+build)
+# and be ReDoS-safe (CodeQL py/redos / CWE-1333). The earlier
+# ``(?:[-+][0-9A-Za-z.-]+)*`` pattern backtracked exponentially on
+# ``9.9.9+`` followed by many ``-``; the fixed single-suffix pattern is
+# linear.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "v",
+    [
+        "1.2.3",
+        "0.0.0",
+        "10.20.30",
+        "1.0.0-alpha",
+        "1.0.0-alpha.1",
+        "1.0.0+build.5",
+        "1.0.0-rc.1+exp.sha.5114f85",  # combined prerelease + build
+        "25.8.0",
+        "4.60.4",
+        "5.7.2",
+        "9.9.9-a-b-c",
+    ],
+)
+def test_semver_re_matches_valid_shapes(v):
+    assert guard._SEMVER_RE.match(v), f"should be recognized as semver: {v}"
+
+
+@pytest.mark.parametrize(
+    "v",
+    [
+        "not-semver",
+        "1.2",
+        "1",
+        "v1.2.3",
+        "1.2.3.4",
+        "",
+        "1.2.x",
+        "^1.2.3",
+        "1.2.3 ",
+        " 1.2.3",
+        "abc",
+    ],
+)
+def test_semver_re_rejects_non_semver(v):
+    assert not guard._SEMVER_RE.match(v), f"should NOT be semver: {v}"
+
+
+@pytest.mark.parametrize("n", [200, 2000, 20000])
+def test_semver_re_is_redos_safe_linear_time(n):
+    """The exact CodeQL ``py/redos`` exploit shape (``9.9.9+`` then many
+    ``-`` then a non-matching tail) must resolve in linear time.
+
+    Before the fix this exhibited exponential backtracking; assert it now
+    completes well under a generous wall-clock bound that an exponential
+    blowup could never meet (e.g. n=20000 was effectively non-terminating).
+    """
+    evil = "9.9.9+" + "-" * n + "!"
+    start = time.perf_counter()
+    result = guard._SEMVER_RE.match(evil)
+    elapsed = time.perf_counter() - start
+    assert result is None  # the trailing '!' makes it a non-match
+    assert elapsed < 1.0, (
+        f"ReDoS: {n} chars took {elapsed:.3f}s (exponential backtracking)"
+    )
 
 
 # ---------------------------------------------------------------------------

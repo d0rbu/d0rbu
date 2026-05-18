@@ -294,10 +294,23 @@ def parse_uv_lock(text: str) -> list[UvPackage]:
     return packages
 
 
-# A concrete semver-shaped version (``MAJOR.MINOR.PATCH`` with optional
-# prerelease/build). A registry-shaped candidate must have one; a missing /
-# non-semver ``version`` marks a genuine non-registry (link/workspace) entry.
-_SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)*$")
+# A concrete semver-shaped version (``MAJOR.MINOR.PATCH`` with an optional
+# prerelease/build suffix). A registry-shaped candidate must have one; a
+# missing / non-semver ``version`` marks a genuine non-registry
+# (link/workspace) entry.
+#
+# The suffix is a SINGLE non-repeating optional group
+# ``[-+][0-9A-Za-z.+-]*`` (a leading ``-``/``+`` then a run of the allowed
+# set, which itself includes ``+``/``-`` so a combined prerelease+build like
+# ``-rc.1+exp.sha.5114f85`` is recognized) -- deliberately NOT
+# ``(?:[-+][0-9A-Za-z.-]+)*``: that outer ``*`` over a group whose body can
+# itself match ``-`` is ambiguous and exhibits exponential backtracking on
+# inputs like ``9.9.9+`` followed by many ``-`` (CodeQL ``py/redos`` /
+# CWE-1333). Here every character class is consumed exactly once with no
+# overlapping/ambiguous repetition, so matching is linear in the input
+# length. We only need to *recognize a semver shape*, not fully validate
+# SemVer 2.0, so the simpler linear pattern is sufficient.
+_SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?$")
 # ``resolved`` schemes that mark a *genuine* non-registry source (never
 # age-checked): a local tarball, a git dependency, or a workspace link.
 _NON_REGISTRY_RESOLVED_PREFIXES = ("file:", "git+", "git:")
