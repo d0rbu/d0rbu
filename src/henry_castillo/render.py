@@ -15,8 +15,6 @@ from rich.text import Text
 
 from henry_castillo.content import Profile, Project
 
-_TODO_SUBSTACK = "https://TODO.substack.com  (set your Substack URL)"
-
 
 def banner(profile: Profile) -> RenderableType:
     name = profile.name or "henry-castillo"
@@ -32,7 +30,7 @@ def banner(profile: Profile) -> RenderableType:
 def about(profile: Profile) -> RenderableType:
     body = profile.about.strip() if profile.about else ""
     return Panel(
-        body or "No bio yet — set `about` in content/profile.json.",
+        Text(body or "No bio yet — set `about` in content/profile.json."),
         title="About",
         border_style="cyan",
     )
@@ -49,14 +47,14 @@ def projects(projects: Sequence[Project], tag: str | None = None) -> RenderableT
             if tag is not None
             else "No projects yet — add to content/projects.json."
         )
-        return Panel(msg, title="Projects", border_style="cyan")
+        return Panel(Text(msg), title="Projects", border_style="cyan")
     table = Table(expand=True, show_lines=False)
     table.add_column("Project", style="bold")
     table.add_column("What", overflow="fold")
     table.add_column("Link", style="dim")
     for p in items:
         tags = f" [{', '.join(p.tags)}]" if p.tags else ""
-        table.add_row(p.name, (p.blurb or "") + tags, p.url or "")
+        table.add_row(Text(p.name), Text((p.blurb or "") + tags), Text(p.url or ""))
     return Panel(table, title="Projects", border_style="cyan")
 
 
@@ -64,7 +62,7 @@ def resume(profile: Profile) -> RenderableType:
     r = profile.resume
     if not (r.experience or r.education or r.highlights or r.pdf):
         return Panel(
-            "No résumé yet — set `resume` in content/profile.json.",
+            Text("No résumé yet — set `resume` in content/profile.json."),
             title="Résumé",
             border_style="cyan",
         )
@@ -120,16 +118,18 @@ def contact(profile: Profile) -> RenderableType:
         lines.append(f"{label.capitalize()}:  {url}")
     if not lines:
         return Panel(
-            "No contact info yet — set `contact`/`links` in content/profile.json.",
+            Text(
+                "No contact info yet — set `contact`/`links` in content/profile.json."
+            ),
             title="Contact",
             border_style="cyan",
         )
-    return Panel("\n".join(lines), title="Contact", border_style="cyan")
+    return Panel(Text("\n".join(lines)), title="Contact", border_style="cyan")
 
 
 def substack_url(profile: Profile) -> str | None:
     url = profile.links.get("substack", "")
-    if not url or url == _TODO_SUBSTACK or "TODO" in url:
+    if not url or "TODO" in url:
         return None
     return url
 
@@ -138,12 +138,14 @@ def substack(profile: Profile) -> RenderableType:
     url = substack_url(profile)
     if url is None:
         return Panel(
-            "Substack not configured yet — set `links.substack` in "
-            "content/profile.json.",
+            Text(
+                "Substack not configured yet — set `links.substack` in "
+                "content/profile.json."
+            ),
             title="Substack",
             border_style="cyan",
         )
-    return Panel(f"Writing: {url}", title="Substack", border_style="cyan")
+    return Panel(Text(f"Writing: {url}"), title="Substack", border_style="cyan")
 
 
 SECTIONS: list[tuple[str, Callable[[Profile, Sequence[Project]], RenderableType]]] = [

@@ -56,7 +56,8 @@ def test_about_empty_is_graceful():
 def test_projects_lists_all():
     out = _text(render.projects(PROJECTS))
     assert "saebench" in out and "moe-router" in out
-    assert "sae eval suite" in out and "github.com/d0rbu/saebench" in out
+    assert "sae eval suite" in out and "github.com/d0rbu" in out
+    assert "interp" in out and "python" in out
 
 
 def test_projects_tag_filter_case_insensitive():
@@ -66,6 +67,7 @@ def test_projects_tag_filter_case_insensitive():
 
 def test_projects_tag_no_match_message():
     assert "No projects" in _text(render.projects(PROJECTS, tag="nope"))
+    assert "nope" in _text(render.projects(PROJECTS, tag="nope"))
 
 
 def test_projects_empty_message():
@@ -209,3 +211,18 @@ def test_projects_item_with_no_tags():
     notag = Project("notag-proj", "blurb", "https://example.com", [])
     out = _text(render.projects([notag]))
     assert "notag-proj" in out
+
+
+def test_content_with_bracket_markup_renders_literally():
+    """Regression: bracket substrings in content render literally, not as markup."""
+    p = Profile(
+        name="N",
+        about="bio [bold]x[/bold] [link]",
+        email="e@x.y",
+        links={"github": "https://g/[u]"},
+    )
+    assert "[bold]x[/bold] [link]" in _text(render.about(p))
+    assert "https://g/[u]" in _text(render.contact(p))
+    proj = [Project("p", "blurb [b]z[/b]", "https://u/[v]", ["t1", "t2"])]
+    out = _text(render.projects(proj))
+    assert "blurb [b]z[/b]" in out and "[t1, t2]" in out and "https://u/[v]" in out
