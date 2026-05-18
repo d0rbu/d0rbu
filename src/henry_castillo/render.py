@@ -134,7 +134,7 @@ def contact(profile: Profile) -> RenderableType:
 
 def substack_url(profile: Profile) -> str | None:
     url = profile.links.get("substack", "")
-    if not url or "TODO" in url:
+    if not url.strip() or "TODO" in url.upper():
         return None
     return url
 

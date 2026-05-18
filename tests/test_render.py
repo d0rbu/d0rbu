@@ -1,6 +1,7 @@
 import io
 import unicodedata
 
+import pytest
 from rich.console import Console
 
 from henry_castillo import render
@@ -255,3 +256,29 @@ def test_content_with_bracket_markup_renders_literally():
     proj = [Project("p", "blurb [b]z[/b]", "https://u/[v]", ["t1", "t2"])]
     out = _text(render.projects(proj))
     assert "blurb [b]z[/b]" in out and "[t1, t2]" in out and "https://u/[v]" in out
+
+
+@pytest.mark.parametrize(
+    "placeholder",
+    [
+        "https://TODO.substack.com",
+        "https://todo.substack.com",
+        "https://ToDo.substack.com",
+        "  ",
+        "",
+        "\t\n",
+    ],
+)
+def test_substack_url_rejects_placeholder_any_case(placeholder):
+    assert render.substack_url(Profile(links={"substack": placeholder})) is None
+
+
+def test_substack_url_accepts_real_url():
+    assert (
+        render.substack_url(Profile(links={"substack": "https://real.substack.com"}))
+        == "https://real.substack.com"
+    )
+
+
+def test_substack_url_missing_key_is_none():
+    assert render.substack_url(Profile()) is None
