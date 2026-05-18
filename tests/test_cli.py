@@ -548,6 +548,7 @@ def test_default_tty_runs_interactive_loop(monkeypatch):
         console.print("INTERACTIVE_CALLED")
 
     monkeypatch.setattr(_m.tui, "run", fake_run)
+    monkeypatch.setattr(up, "check_for_update", lambda **k: None)
     rc, out = _run([], monkeypatch, tty=True)
     assert rc == 0 and called.get("yes") and "INTERACTIVE_CALLED" in out
 
