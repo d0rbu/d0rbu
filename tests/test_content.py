@@ -125,3 +125,20 @@ def test_packaged_content_returns_path():
     p = content._packaged_content()
     assert isinstance(p, Path)
     assert p.name == "_content"
+
+
+def test_real_repo_content_loads_and_is_coherent():
+    """The committed content/*.json must parse via the loader into a coherent
+    Profile/Projects (schema conformance for the drafted content)."""
+    p = content.load_profile()
+    assert isinstance(p, content.Profile)
+    assert p.handle == "d0rbu"
+    assert p.name  # non-empty
+    assert p.links.get("github") == "https://github.com/d0rbu"
+    assert isinstance(p.resume, content.Resume)
+    projects = content.load_projects()
+    assert isinstance(projects, list)
+    for proj in projects:
+        assert isinstance(proj, content.Project)
+        assert proj.name  # every project has a name
+        assert isinstance(proj.tags, list)

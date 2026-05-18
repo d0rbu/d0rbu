@@ -1,8 +1,50 @@
 [
   {
-    "name": "SAEBench",
-    "blurb": "sparse autoencoder eval suite",
-    "url": "https://github.com/d0rbu/SAEBench",
-    "tags": ["interp"]
+    "name": "mc-dreamer",
+    "blurb": "",
+    "url": "https://github.com/d0rbu/mc-dreamer",
+    "tags": ["python"]
+  },
+  {
+    "name": "llamastack-austin",
+    "blurb": "",
+    "url": "https://github.com/d0rbu/llamastack-austin",
+    "tags": ["python"]
+  },
+  {
+    "name": "talk-visuals",
+    "blurb": "",
+    "url": "https://github.com/d0rbu/talk-visuals",
+    "tags": ["python"]
+  },
+  {
+    "name": "ms-reactor-week-8-mafia",
+    "blurb": "",
+    "url": "https://github.com/d0rbu/ms-reactor-week-8-mafia",
+    "tags": ["svelte"]
+  },
+  {
+    "name": "autocoder",
+    "blurb": "",
+    "url": "https://github.com/d0rbu/autocoder",
+    "tags": ["python"]
+  },
+  {
+    "name": "digitize-book",
+    "blurb": "",
+    "url": "https://github.com/d0rbu/digitize-book",
+    "tags": ["c"]
+  },
+  {
+    "name": "gpt-web-assistant",
+    "blurb": "GPT over your web history!",
+    "url": "https://github.com/d0rbu/gpt-web-assistant",
+    "tags": ["typescript"]
+  },
+  {
+    "name": "HfSG-frontend",
+    "blurb": "",
+    "url": "https://github.com/d0rbu/HfSG-frontend",
+    "tags": ["javascript"]
   }
 ]
