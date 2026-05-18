@@ -21,11 +21,13 @@ website and as a terminal CLI published to PyPI and npm as `henry-castillo`.
 ## The CLI
 
 ```bash
-uvx henry-castillo            # interactive card (About · Projects · Résumé · Contact · Substack)
-henry-castillo about          # or jump straight to a section
+uvx henry-castillo                 # interactive card (About · Projects · Résumé · Contact · Substack)
+henry-castillo about               # or jump straight to a section
 henry-castillo projects --tag interp
-henry-castillo resume --open  # open the résumé link
-henry-castillo --version | --check-update | --update
+henry-castillo resume --open       # open the résumé link
+henry-castillo contact
+henry-castillo substack
+henry-castillo --version | --check-update | --update | --no-update-check
 ```
 
 Runs fully offline (content is bundled). On a non-interactive pipe it prints
