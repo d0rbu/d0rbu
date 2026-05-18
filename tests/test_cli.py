@@ -7,6 +7,7 @@ pinned here. No real network (see tests/conftest.py).
 
 import argparse
 import importlib.metadata
+import urllib.error
 
 import pytest
 from packaging.version import Version
@@ -281,6 +282,67 @@ def test_maybe_notice_suppressed_when_not_tty_and_no_network(monkeypatch, capsys
     rc = main([])
     assert capsys.readouterr().out == _DEFAULT_STDOUT
     assert rc == 0
+
+
+def test_maybe_notice_offline_under_tty_does_not_crash_and_prints_no_notice(
+    tmp_path, monkeypatch, capsys
+):
+    """End-to-end graceful-offline (pairs with the FIX-1 non-dict guard).
+
+    Interactive TTY, update check ENABLED (flag off, env unset), but the
+    real fetch path fails (``urlopen`` raises ``URLError``). ``main([])``
+    must return 0, print NO update-notice line, and not raise -- proving the
+    CLI's background update check can never crash the program on a network
+    failure. ``check_for_update`` is NOT stubbed; only ``urlopen`` is, so the
+    real ``fetch_latest_version`` error path executes.
+    """
+    monkeypatch.delenv("HENRY_CASTILLO_NO_UPDATE_CHECK", raising=False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr(up, "cache_path", lambda: tmp_path / "u.json")
+
+    def boom(*a, **k):
+        raise urllib.error.URLError("offline")
+
+    monkeypatch.setattr(up.urllib.request, "urlopen", boom)
+    rc = main([])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert out == _DEFAULT_STDOUT
+    assert "A new release" not in out
+
+
+def test_maybe_notice_under_tty_non_dict_body_prints_no_notice(
+    tmp_path, monkeypatch, capsys
+):
+    """Same offline guarantee, end-to-end through the FIX-1 guard.
+
+    A non-dict PyPI body (``null``) drives the real
+    ``fetch_latest_version`` -> ``None`` path (the FIX-1 ``isinstance(data,
+    dict)`` guard). ``check_for_update``/``fetch_latest_version`` are NOT
+    stubbed; only ``urlopen``. ``main([])`` must return 0, print no notice,
+    and not raise -- a real regression of the FIX-1 guard would surface here
+    as an uncaught ``TypeError`` crashing the CLI.
+    """
+    monkeypatch.delenv("HENRY_CASTILLO_NO_UPDATE_CHECK", raising=False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr(up, "cache_path", lambda: tmp_path / "u.json")
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b"null"
+
+    monkeypatch.setattr(up.urllib.request, "urlopen", lambda *a, **k: _Resp())
+    rc = main([])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert out == _DEFAULT_STDOUT
+    assert "A new release" not in out
 
 
 def test_maybe_notice_guard_unit_no_update_check(monkeypatch):

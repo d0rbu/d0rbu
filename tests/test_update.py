@@ -391,6 +391,71 @@ def test_check_for_update_default_cache_path_uses_module_lookup(
     assert json.loads(target.read_text())["latest"] == "9.9.9"
 
 
+def test_check_for_update_default_interval_is_one_day():
+    """The throttle window constant is exactly 86400s (1 day).
+
+    Kills a mutation of ``CHECK_INTERVAL_SECONDS`` away from one day.
+    """
+    assert update.CHECK_INTERVAL_SECONDS == 86400
+
+
+def test_check_for_update_default_interval_throttles_at_one_day(
+    tmp_path: Path, monkeypatch
+):
+    """Behavioral pin of the DEFAULT interval (no ``interval=`` passed).
+
+    ~12h after ``last_check`` must NOT refetch (still inside the 1-day
+    window); ~25h after must refetch. This kills any mutation of
+    ``CHECK_INTERVAL_SECONDS`` (the default arg value), which a test that
+    always passes an explicit ``interval=`` cannot catch.
+    """
+    monkeypatch.setattr(update, "current_version", lambda: "0.0.0")
+    cache = tmp_path / "u.json"
+    last = 1_000_000.0
+    cache.write_text(json.dumps({"last_check": last, "latest": "1.0.0"}))
+    calls = []
+
+    def fetcher():
+        calls.append(1)
+        return "9.9.9"
+
+    # ~12h later: inside the default 86400s window -> served from cache.
+    got = update.check_for_update(
+        now=last + 12 * 3600, cache_path=cache, fetcher=fetcher
+    )
+    assert calls == []
+    assert got == "1.0.0"
+
+    # ~25h later: past the default 86400s window -> refetch.
+    got = update.check_for_update(
+        now=last + 25 * 3600, cache_path=cache, fetcher=fetcher
+    )
+    assert calls == [1]
+    assert got == "9.9.9"
+
+
+def test_check_for_update_creates_multi_level_cache_dirs(tmp_path: Path, monkeypatch):
+    """The cache parent is created with ALL missing intermediate levels.
+
+    Pointing the cache at a path with >=2 missing parent components proves
+    ``mkdir(parents=True)`` -- a ``parents=False`` mutation would raise
+    ``FileNotFoundError`` (swallowed by ``_write_cache``) so the file would
+    NOT be written and these assertions would fail.
+    """
+    monkeypatch.setattr(update, "current_version", lambda: "0.0.0")
+    cache = tmp_path / "a" / "b" / "c" / "u.json"
+    assert not cache.parent.exists()
+    got = update.check_for_update(
+        now=1000.0, cache_path=cache, interval=100, fetcher=lambda: "9.9.9"
+    )
+    assert got == "9.9.9"
+    assert cache.is_file()
+    assert json.loads(cache.read_text()) == {
+        "last_check": 1000.0,
+        "latest": "9.9.9",
+    }
+
+
 def test_check_for_update_throttles_after_failed_fetch(tmp_path, monkeypatch):
     monkeypatch.setattr(update, "current_version", lambda: "0.0.0")
     cache = tmp_path / "u.json"
