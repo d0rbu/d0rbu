@@ -11,9 +11,17 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from importlib.resources import files
-from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
+
+
+class _Resource(Protocol):
+    """Structural type for a bundled-content handle (pathlib.Path or an
+    importlib.resources Traversable both satisfy it)."""
+
+    def is_file(self) -> bool: ...
+
+    def read_text(self, encoding: str = ...) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -43,12 +51,12 @@ class Project:
     tags: list[str] = field(default_factory=list)
 
 
-def _packaged_resource(name: str) -> Traversable | None:
-    """The bundled ``henry_castillo/_content/<name>`` as a Traversable, or
+def _packaged_resource(name: str) -> _Resource | None:
+    """The bundled ``henry_castillo/_content/<name>`` as a resource handle, or
     ``None`` if it is not a readable packaged resource (dev checkout, or a
     loader without resource support). Zip-safe (works under zipimport)."""
     try:
-        resource = files("henry_castillo").joinpath("_content", name)
+        resource = files("henry_castillo") / "_content" / name
         if resource.is_file():
             return resource
     except (ModuleNotFoundError, TypeError, ValueError, OSError):
