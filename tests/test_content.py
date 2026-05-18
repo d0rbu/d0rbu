@@ -278,6 +278,7 @@ def test_control_chars_stripped_from_all_string_fields(tmp_path, monkeypatch):
 
 def test_sanitize_returns_str_and_strips_controls():
     assert content._sanitize("a\x1bb\x00c\nd\te") == "abc\nd\te"
+    assert content._sanitize("a\rb\x0cc") == "abc"  # CR/FF stripped; keep-set: \n \t
     assert content._sanitize("plain") == "plain"
     # _sanitize_json passthrough: non-str/dict/list values are returned as-is
     assert content._sanitize_json(42) == 42
