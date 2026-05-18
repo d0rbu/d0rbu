@@ -1,4 +1,5 @@
 import json
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -106,6 +107,17 @@ def test_read_json_recursionerror_returns_none(tmp_path, monkeypatch):
 def test_read_json_utf8_non_ascii(tmp_path, monkeypatch):
     _pkg(monkeypatch, tmp_path, profile={"name": "Héctor Castañeda", "handle": "h"})
     assert content.load_profile().name == "Héctor Castañeda"
+
+
+def test_read_json_uses_explicit_utf8_encoding(monkeypatch):
+    """_read_json must pass encoding='utf-8' explicitly so content does not
+    depend on the ambient locale (kills the read_text() encoding mutation
+    deterministically on any platform)."""
+    resource = MagicMock()
+    resource.read_text.return_value = '{"name": "X"}'
+    monkeypatch.setattr(content, "_packaged_resource", lambda _name: resource)
+    assert content._read_json("profile.json") == {"name": "X"}
+    resource.read_text.assert_called_once_with(encoding="utf-8")
 
 
 def test_load_profile_full(tmp_path, monkeypatch):
