@@ -1,20 +1,21 @@
-"""CLI entrypoint.
+"""CLI entrypoint: interactive card (TTY) or subcommands, content-driven.
 
-Milestone 1.5 wires version reporting and auto-update. Real interactive
-card + content subcommands arrive in Milestone 2; the default run is still
-an intentional placeholder.
+Update-check behavior (`--version/--check-update/--update/--no-update-check`,
+the throttled TTY-only offline-safe notice) is preserved from Milestone 1.5.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import sys
+import webbrowser
 
-from henry_castillo import __version__
+from rich.console import Console
+
+from henry_castillo import __version__, content, render, tui
 from henry_castillo import update as _update
-
-_BANNER = "henry-castillo {version}"
 
 _FALSEY_ENV = {"", "0", "false", "no", "off"}
 
@@ -22,6 +23,10 @@ _FALSEY_ENV = {"", "0", "false", "no", "off"}
 def _update_check_disabled_by_env() -> bool:
     val = os.environ.get("HENRY_CASTILLO_NO_UPDATE_CHECK")
     return val is not None and val.strip().lower() not in _FALSEY_ENV
+
+
+def _open_url(url: str) -> None:
+    webbrowser.open(url)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -46,33 +51,72 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="skip the background update check on this run",
     )
+    sub = parser.add_subparsers(dest="section")
+    sub.add_parser("about", help="show the about section")
+    pp = sub.add_parser("projects", help="list projects")
+    pp.add_argument("--tag", help="filter projects by tag")
+    rp = sub.add_parser("resume", aliases=["résumé"], help="show the résumé")
+    rp.add_argument(
+        "--open",
+        dest="open_resume",
+        action="store_true",
+        help="open the résumé PDF/web link in a browser",
+    )
+    sub.add_parser("contact", help="show contact info")
+    sub.add_parser("substack", help="show the Substack link")
     return parser
 
 
 def _maybe_notice(args: argparse.Namespace) -> None:
-    """Print a one-line update notice, only when interactive and allowed."""
     if args.no_update_check or _update_check_disabled_by_env():
         return
-    if not sys.stdout.isatty():  # never in pipes/CI/tests
+    if not sys.stdout.isatty():
         return
     latest = _update.check_for_update()
     if latest:
         print(_update.update_notice(latest))
 
 
+def _render_section(args: argparse.Namespace, console: Console) -> int:
+    profile = content.load_profile()
+    section = args.section
+    if section == "about":
+        console.print(render.about(profile))
+    elif section == "projects":
+        console.print(
+            render.projects(content.load_projects(), tag=getattr(args, "tag", None))
+        )
+    elif section in ("resume", "résumé"):
+        console.print(render.resume(profile))
+        if getattr(args, "open_resume", False):
+            pdf = profile.resume.pdf
+            if pdf:
+                _open_url(pdf)
+            else:
+                console.print(
+                    "[dim]No résumé link set (`resume.pdf` in "
+                    "content/profile.json).[/dim]"
+                )
+    elif section == "contact":
+        console.print(render.contact(profile))
+    elif section == "substack":
+        console.print(render.substack(profile))
+        url = render.substack_url(profile)
+        if url is not None:
+            _open_url(url)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
-    """Entry point for all six console aliases."""
     if argv is None:
         argv = sys.argv[1:]
     args = _build_parser().parse_args(argv)
 
     if args.version:
-        print(_BANNER.format(version=__version__))
+        print(f"henry-castillo {__version__}")
         return 0
-
     if args.update:
         return _update.perform_update()
-
     if args.check_update:
         latest = _update.check_for_update()
         if latest:
@@ -84,11 +128,21 @@ def main(argv: list[str] | None = None) -> int:
             print(f"henry-castillo {__version__} is up to date.")
         return 0
 
-    print(_BANNER.format(version=__version__))
-    print("Personal website + CLI business card — scaffold.")
-    print("CLI features land in a later release.")
-    print("Repo: https://github.com/d0rbu/d0rbu")
-    _maybe_notice(args)
+    console = Console(highlight=False)
+    if args.section is not None:
+        rc = _render_section(args, console)
+        _maybe_notice(args)
+        return rc
+
+    profile = content.load_profile()
+    projects = content.load_projects()
+    if sys.stdout.isatty():
+        with contextlib.suppress(EOFError, RuntimeError):
+            tui.run(profile, projects, console=console)
+        _maybe_notice(args)
+    else:
+        render.render_all(console, profile, projects)
+        _maybe_notice(args)
     return 0
 
 

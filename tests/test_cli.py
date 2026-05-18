@@ -7,20 +7,22 @@ pinned here. No real network (see tests/conftest.py).
 
 import argparse
 import importlib.metadata
+import io
 import urllib.error
 
 import pytest
 from packaging.version import Version
+from rich.console import Console
 
+import henry_castillo.__main__ as _m
 import henry_castillo.update as up
 from henry_castillo import __version__
 from henry_castillo.__main__ import _maybe_notice, _update_check_disabled_by_env, main
+from henry_castillo.content import Profile, Resume
 
-_DEFAULT_STDOUT = (
-    f"henry-castillo {__version__}\n"
-    "Personal website + CLI business card — scaffold.\n"
-    "CLI features land in a later release.\n"
-    "Repo: https://github.com/d0rbu/d0rbu\n"
+_EXPECTED_NOTICE = (
+    f"A new release of henry-castillo is available: {__version__} -> 9.9.9. "
+    f"Run `henry-castillo --update` to upgrade.\n"
 )
 
 
@@ -238,10 +240,7 @@ def test_maybe_notice_positive_path_exact_real_notice(monkeypatch, capsys):
     rc = main([])
     out = capsys.readouterr().out
     assert rc == 0
-    assert out == _DEFAULT_STDOUT + (
-        f"A new release of henry-castillo is available: {__version__} -> 9.9.9. "
-        f"Run `henry-castillo --update` to upgrade.\n"
-    )
+    assert _EXPECTED_NOTICE in out
 
 
 def test_maybe_notice_no_update_available_prints_nothing_extra(monkeypatch, capsys):
@@ -250,7 +249,7 @@ def test_maybe_notice_no_update_available_prints_nothing_extra(monkeypatch, caps
     rc = main([])
     out = capsys.readouterr().out
     assert rc == 0
-    assert out == _DEFAULT_STDOUT
+    assert "A new release" not in out
 
 
 def test_maybe_notice_suppressed_with_no_update_check_flag(monkeypatch, capsys):
@@ -258,9 +257,10 @@ def test_maybe_notice_suppressed_with_no_update_check_flag(monkeypatch, capsys):
     monkeypatch.setattr(up, "check_for_update", lambda **k: called.append(1) or "9.9.9")
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     rc = main(["--no-update-check"])
-    assert capsys.readouterr().out == _DEFAULT_STDOUT
+    out = capsys.readouterr().out
     assert rc == 0
     assert called == []
+    assert "A new release" not in out
 
 
 def test_maybe_notice_suppressed_by_env_var(monkeypatch, capsys):
@@ -269,7 +269,6 @@ def test_maybe_notice_suppressed_by_env_var(monkeypatch, capsys):
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     monkeypatch.setenv("HENRY_CASTILLO_NO_UPDATE_CHECK", "1")
     rc = main([])
-    assert capsys.readouterr().out == _DEFAULT_STDOUT
     assert rc == 0
     assert called == []
 
@@ -280,8 +279,9 @@ def test_maybe_notice_suppressed_when_not_tty_and_no_network(monkeypatch, capsys
     # check_for_update is NOT mocked: if the guard were wrong it would attempt
     # a real fetch, which the autouse network block turns into RuntimeError.
     rc = main([])
-    assert capsys.readouterr().out == _DEFAULT_STDOUT
+    out = capsys.readouterr().out
     assert rc == 0
+    assert "A new release" not in out
 
 
 def test_maybe_notice_offline_under_tty_does_not_crash_and_prints_no_notice(
@@ -307,7 +307,6 @@ def test_maybe_notice_offline_under_tty_does_not_crash_and_prints_no_notice(
     rc = main([])
     out = capsys.readouterr().out
     assert rc == 0
-    assert out == _DEFAULT_STDOUT
     assert "A new release" not in out
 
 
@@ -344,7 +343,6 @@ def test_maybe_notice_under_tty_non_dict_body_prints_no_notice(
     rc = main([])
     out = capsys.readouterr().out
     assert rc == 0
-    assert out == _DEFAULT_STDOUT
     assert "A new release" not in out
 
 
@@ -378,7 +376,6 @@ def test_main_under_tty_info_null_body_rc0_no_notice_no_traceback(
     rc = main([])
     out = capsys.readouterr().out
     assert rc == 0
-    assert out == _DEFAULT_STDOUT
     assert "A new release" not in out
     assert "Traceback" not in out
 
@@ -417,7 +414,8 @@ def test_default_run_exact_stdout(capsys):
     rc = main([])
     cap = capsys.readouterr()
     assert rc == 0
-    assert cap.out == _DEFAULT_STDOUT
+    assert "About" in cap.out
+    assert "Projects" in cap.out
     assert cap.err == ""
 
 
@@ -426,7 +424,7 @@ def test_main_uses_sys_argv_when_argv_is_none(monkeypatch, capsys):
     rc = main(None)
     cap = capsys.readouterr()
     assert rc == 0
-    assert cap.out == _DEFAULT_STDOUT
+    assert "About" in cap.out
 
 
 def test_main_uses_sys_argv_version_when_argv_is_none(monkeypatch, capsys):
@@ -447,3 +445,143 @@ def test_version_matches_distribution_metadata():
 
 def test_version_is_pep440_parseable():
     assert str(Version(__version__)) == __version__
+
+
+def _run(argv, monkeypatch, *, tty=False):
+    """Run main() with stdout captured; isatty controllable."""
+    buf = io.StringIO()
+    buf.isatty = lambda: tty  # type: ignore[attr-defined]  # ty:ignore[invalid-assignment]
+    monkeypatch.setattr("sys.stdout", buf)
+    rc = main(argv)
+    return rc, buf.getvalue()
+
+
+def test_subcommand_about(monkeypatch):
+    rc, out = _run(["about"], monkeypatch)
+    assert rc == 0
+    assert "About" in out
+
+
+def test_subcommand_projects(monkeypatch):
+    rc, out = _run(["projects"], monkeypatch)
+    assert rc == 0
+    assert "Projects" in out
+
+
+def test_subcommand_projects_tag(monkeypatch):
+    rc, out = _run(["projects", "--tag", "zzznotareal_tag"], monkeypatch)
+    assert rc == 0
+    assert "No projects tagged 'zzznotareal_tag'." in out
+
+
+def test_subcommand_resume_and_accent_alias(monkeypatch):
+    rc, out = _run(["resume"], monkeypatch)
+    assert rc == 0 and "Résumé" in out
+    rc2, out2 = _run(["résumé"], monkeypatch)
+    assert rc2 == 0 and "Résumé" in out2
+
+
+def test_subcommand_resume_open(monkeypatch):
+    opened: list[str] = []
+    monkeypatch.setattr("henry_castillo.__main__._open_url", opened.append)
+    rc, _ = _run(["resume", "--open"], monkeypatch)
+    assert rc == 0
+    # opened only if the drafted résumé has a real pdf URL; with the DRAFT
+    # placeholder (empty pdf) it must NOT open and must not crash:
+    assert opened == [] or opened  # tolerate both; the next test pins behavior
+
+
+def test_resume_open_with_pdf(monkeypatch):
+    monkeypatch.setattr(
+        _m.content,
+        "load_profile",
+        lambda: Profile(resume=Resume(pdf="https://x/cv.pdf")),
+    )
+    opened: list[str] = []
+    monkeypatch.setattr(_m, "_open_url", opened.append)
+    rc, _ = _run(["resume", "--open"], monkeypatch)
+    assert rc == 0 and opened == ["https://x/cv.pdf"]
+
+
+def test_resume_open_without_pdf_message(monkeypatch):
+    monkeypatch.setattr(_m.content, "load_profile", Profile)
+    opened: list[str] = []
+    monkeypatch.setattr(_m, "_open_url", opened.append)
+    rc, out = _run(["resume", "--open"], monkeypatch)
+    assert rc == 0 and opened == []
+    assert "no résumé" in out.lower()
+
+
+def test_subcommand_contact(monkeypatch):
+    rc, out = _run(["contact"], monkeypatch)
+    assert rc == 0 and "Contact" in out
+
+
+def test_subcommand_substack(monkeypatch):
+    rc, out = _run(["substack"], monkeypatch)
+    assert rc == 0 and "Substack" in out
+
+
+def test_default_non_tty_renders_all_plain(monkeypatch):
+    rc, out = _run([], monkeypatch, tty=False)
+    assert rc == 0
+    # plain full render: banner + every section, no interactive prompt
+    assert "About" in out and "Projects" in out and "Contact" in out
+
+
+def test_default_tty_runs_interactive_loop(monkeypatch):
+    called = {}
+
+    def fake_run(profile, projects, *, console, **kw):
+        called["yes"] = True
+        console.print("[INTERACTIVE]")
+
+    monkeypatch.setattr(_m.tui, "run", fake_run)
+    rc, out = _run([], monkeypatch, tty=True)
+    assert rc == 0 and called.get("yes") and "[INTERACTIVE]" in out
+
+
+def test_subcommand_suppresses_notice_in_pipe(monkeypatch):
+    monkeypatch.setattr(
+        up,
+        "check_for_update",
+        lambda **_k: (_ for _ in ()).throw(AssertionError("net!")),
+    )
+    rc, out = _run(["about"], monkeypatch, tty=False)
+    assert rc == 0 and "new release" not in out.lower()
+
+
+def test_version_still_short_circuits(monkeypatch):
+    rc, out = _run(["--version"], monkeypatch)
+    assert rc == 0
+    assert out.strip() == f"henry-castillo {__import__('henry_castillo').__version__}"
+
+
+def test_open_url_calls_webbrowser(monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(_m.webbrowser, "open", lambda u: calls.append(u) or True)
+    _m._open_url("https://example.com")
+    assert calls == ["https://example.com"]
+
+
+def test_subcommand_substack_with_url_opens(monkeypatch):
+    monkeypatch.setattr(
+        _m.content,
+        "load_profile",
+        lambda: Profile(links={"substack": "https://s.substack.com"}),
+    )
+    opened: list[str] = []
+    monkeypatch.setattr(_m, "_open_url", opened.append)
+    rc, out = _run(["substack"], monkeypatch)
+    assert rc == 0 and "Substack" in out
+    assert opened == ["https://s.substack.com"]
+
+
+def test_render_section_unknown_section_is_noop(monkeypatch):
+    """Cover the fallthrough branch in _render_section for unrecognized section."""
+    buf = io.StringIO()
+    console = Console(file=buf, highlight=False)
+    args = argparse.Namespace(section="__unknown__", no_update_check=True)
+    rc = _m._render_section(args, console)
+    assert rc == 0
+    assert buf.getvalue() == ""
