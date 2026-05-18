@@ -1,5 +1,6 @@
 import io
 
+import pytest
 from rich.console import Console
 
 from henry_castillo import tui
@@ -116,7 +117,11 @@ def test_default_select_returns_none_on_keyboardinterrupt(monkeypatch):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(tui.questionary, "select", fake_select)
-    assert tui._default_select("Pick", ["About"]) is None
+    try:
+        result = tui._default_select("Pick", ["About"])
+    except KeyboardInterrupt:
+        pytest.fail("KeyboardInterrupt escaped _default_select (catch removed)")
+    assert result is None
 
 
 def test_default_open_url_uses_webbrowser(monkeypatch):
@@ -204,4 +209,49 @@ def test_default_select_returns_none_on_eoferror(monkeypatch):
         raise EOFError
 
     monkeypatch.setattr(tui.questionary, "select", fake_select)
-    assert tui._default_select("Pick", ["About"]) is None
+    try:
+        result = tui._default_select("Pick", ["About"])
+    except EOFError:
+        pytest.fail("EOFError escaped _default_select (catch removed)")
+    assert result is None
+
+
+def test_quit_string_choice_exits_loop():
+    console, buf = _console()
+    seq = iter(["Quit"])
+    tui.run(
+        PROFILE,
+        PROJECTS,
+        console=console,
+        select=lambda *_a, **_k: next(seq),
+        open_url=lambda _u: None,
+    )
+    out = buf.getvalue()
+    assert "Henry Castillo" in out
+    assert "Bio." not in out
+
+
+def test_resume_selection_renders():
+    console, buf = _console()
+    seq = iter(["Résumé", None])
+    tui.run(
+        PROFILE,
+        PROJECTS,
+        console=console,
+        select=lambda *_a, **_k: next(seq),
+        open_url=lambda _u: None,
+    )
+    assert "Résumé" in buf.getvalue()
+
+
+def test_contact_selection_renders():
+    console, buf = _console()
+    seq = iter(["Contact", None])
+    tui.run(
+        PROFILE,
+        PROJECTS,
+        console=console,
+        select=lambda *_a, **_k: next(seq),
+        open_url=lambda _u: None,
+    )
+    assert "e@x.y" in buf.getvalue()

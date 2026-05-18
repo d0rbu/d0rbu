@@ -282,3 +282,50 @@ def test_substack_url_accepts_real_url():
 
 def test_substack_url_missing_key_is_none():
     assert render.substack_url(Profile()) is None
+
+
+def test_contact_excludes_substack_url():
+    out = _text(render.contact(PROFILE))  # PROFILE has a substack link
+    assert "substack" not in out.lower()
+    assert "x.substack.com" not in out
+
+
+def test_resume_pdf_line_absent_when_empty():
+    p = Profile(
+        resume=Resume(
+            pdf="",
+            experience=[{"org": "Corp", "role": "Dev", "period": "2023"}],
+            education=[],
+            highlights=["h1"],
+        )
+    )
+    assert "PDF:" not in _text(render.resume(p))
+
+
+def test_resume_entry_without_summary_has_no_spurious_line():
+    """No extra text is rendered when a resume entry has no 'summary' field.
+
+    If the ``if e.get('summary'):`` guard were removed, the rendered panel
+    would contain '    None' — this test catches that mutation.
+    """
+    p = Profile(
+        resume=Resume(
+            experience=[{"org": "Corp", "role": "Dev", "period": "2023"}],
+            education=[],
+            highlights=[],
+        )
+    )
+    out = _text(render.resume(p))
+    assert "Corp" in out
+    # Removing the summary guard would render 'None' as a literal string
+    assert "None" not in out
+
+
+def test_contact_labels_are_capitalized():
+    p = Profile(
+        email="e@x.y",
+        links={"github": "https://g.io/u", "twitter": "https://t.co/u"},
+    )
+    out = _text(render.contact(p))
+    assert "Github:" in out and "Twitter:" in out
+    assert "github:" not in out

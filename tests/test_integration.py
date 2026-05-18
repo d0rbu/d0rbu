@@ -159,3 +159,27 @@ def test_help_under_ascii_encoding_does_not_crash():
     assert r.returncode == 0
     assert "Traceback" not in r.stdout and "Traceback" not in r.stderr
     assert "UnicodeEncodeError" not in r.stderr
+
+
+def test_all_aliases_byte_identical():
+    aliases = ["henry-castillo", "d0rbu", "d0rb", "hc", "henry", "secret-string-lol"]
+    ref_exe = _resolve(aliases[0])
+    ref = subprocess.run(  # noqa: S603
+        [ref_exe],
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+    )
+    for alias in aliases[1:]:
+        exe = _resolve(alias)
+        r = subprocess.run(  # noqa: S603
+            [exe],
+            capture_output=True,
+            text=True,
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
+        assert r.stdout == ref.stdout, f"{alias} stdout differs"
+        assert r.returncode == ref.returncode
+        assert r.stderr == ref.stderr

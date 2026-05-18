@@ -24,7 +24,7 @@ from henry_castillo.__main__ import (
     _update_check_disabled_by_env,
     main,
 )
-from henry_castillo.content import Profile, Resume
+from henry_castillo.content import Profile, Project, Resume
 
 _EXPECTED_NOTICE = (
     f"A new release of henry-castillo is available: {__version__} -> 9.9.9. "
@@ -491,6 +491,21 @@ def test_subcommand_projects_tag(monkeypatch):
     assert "No projects tagged 'zzznotareal_tag'." in out
 
 
+def test_subcommand_projects_tag_match(monkeypatch):
+    monkeypatch.setattr(
+        _m.content,
+        "load_projects",
+        lambda: [
+            Project("p-alpha", "d", "https://a.io", ["ml", "python"]),
+            Project("p-beta", "d", "https://b.io", ["web"]),
+        ],
+    )
+    rc, out = _run(["projects", "--tag", "ml"], monkeypatch)
+    assert rc == 0
+    assert "p-alpha" in out
+    assert "p-beta" not in out
+
+
 def test_subcommand_resume_and_accent_alias(monkeypatch):
     rc, out = _run(["resume"], monkeypatch)
     assert rc == 0 and "Résumé" in out
@@ -498,14 +513,15 @@ def test_subcommand_resume_and_accent_alias(monkeypatch):
     assert rc2 == 0 and "Résumé" in out2
 
 
-def test_subcommand_resume_open(monkeypatch):
+def test_subcommand_resume_open_draft_no_pdf(monkeypatch):
+    """The committed DRAFT résumé has an empty pdf -> --open must NOT open
+    a browser and must print the no-link message."""
     opened: list[str] = []
     monkeypatch.setattr("henry_castillo.__main__._open_url", opened.append)
-    rc, _ = _run(["resume", "--open"], monkeypatch)
+    rc, out = _run(["resume", "--open"], monkeypatch)
     assert rc == 0
-    # opened only if the drafted résumé has a real pdf URL; with the DRAFT
-    # placeholder (empty pdf) it must NOT open and must not crash:
-    assert opened == [] or opened  # tolerate both; the next test pins behavior
+    assert opened == []
+    assert "no résumé" in out.lower()
 
 
 def test_resume_open_with_pdf(monkeypatch):
