@@ -95,7 +95,8 @@ def test_contact_empty_is_graceful():
 
 
 def test_substack_shows_url():
-    assert "x.substack.com" in _text(render.substack(PROFILE))
+    rendered = _text(render.substack(PROFILE))
+    assert "https://x.substack.com" in rendered
 
 
 def test_substack_unconfigured_message():
@@ -128,7 +129,7 @@ def test_render_all_dumps_every_section():
     assert "saebench" in out
     assert "Acme" in out
     assert "d0rbu@users.noreply.github.com" in out
-    assert "x.substack.com" in out
+    assert "https://x.substack.com" in out
 
 
 def test_substack_url_is_configured_helper():
