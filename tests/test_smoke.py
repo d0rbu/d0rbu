@@ -28,6 +28,6 @@ def test_main_returns_zero_and_renders_card(capsys):
     out, err = capsys.readouterr()
     assert rc == 0
     assert err == ""
-    for _title in ("About", "Projects", "Résumé", "Contact", "Substack"):
+    for _title in ("About", "Projects", "Résumé", "Contact", "Blog"):
         assert _title in out
     assert "A new release" not in out

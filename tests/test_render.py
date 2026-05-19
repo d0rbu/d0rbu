@@ -1,11 +1,21 @@
+"""Tests for render.py — strict Card/CardProfile/CardProject types."""
+
 import io
 import unicodedata
 
-import pytest
 from rich.console import Console
 
 from henry_castillo import render
-from henry_castillo.content import Profile, Project, Resume
+from henry_castillo.content import (
+    Card,
+    CardLinks,
+    CardProfile,
+    CardProject,
+    Profile,
+    Project,
+    Resume,
+    parse_card,
+)
 
 
 def _text(renderable) -> str:
@@ -14,31 +24,55 @@ def _text(renderable) -> str:
     return buf.getvalue()
 
 
-PROFILE = Profile(
-    name="Henry Castillo",
-    handle="d0rbu",
-    tagline="ML / interpretability",
-    about="I work on interpretability.",
-    email="d0rbu@users.noreply.github.com",
-    links={"github": "https://github.com/d0rbu", "substack": "https://x.substack.com"},
-    resume=Resume(
-        pdf="",
-        experience=[{"org": "Acme", "role": "RE", "period": "2024", "summary": "S"}],
-        education=[{"school": "Uni", "degree": "BS", "period": "2020"}],
-        highlights=["Did a thing"],
-    ),
-)
-PROJECTS = [
-    Project(
-        "saebench",
-        "sae eval suite",
-        "https://github.com/d0rbu/saebench",
-        ["interp", "python"],
-    ),
-    Project(
-        "moe-router", "routing study", "https://github.com/d0rbu/moe-router", ["moe"]
-    ),
-]
+# ---------------------------------------------------------------------------
+# Shared fixtures built via parse_card so they are always schema-valid.
+# ---------------------------------------------------------------------------
+
+_PROFILE_DOC: dict[str, object] = {
+    "name": "Henry Castillo",
+    "handle": "d0rbu",
+    "tagline": "ML / interpretability",
+    "about": "I work on interpretability.",
+    "email": "d0rbu@users.noreply.github.com",
+    "links": {
+        "github": "https://github.com/d0rbu",
+        "blog": "https://x.substack.com",
+    },
+}
+_RESUME_DOC: dict[str, object] = {
+    "pdf": "",
+    "experience": [{"org": "Acme", "role": "RE", "period": "2024", "summary": "S"}],
+    "education": [{"school": "Uni", "degree": "BS", "period": "2020"}],
+    "highlights": ["Did a thing"],
+}
+_VALID_DOC: dict[str, object] = {
+    "schema_version": 1,
+    "profile": _PROFILE_DOC,
+    "projects": [
+        {
+            "name": "saebench",
+            "blurb": "sae eval suite",
+            "url": "https://github.com/d0rbu/saebench",
+            "tags": ["interp", "python"],
+        },
+        {
+            "name": "moe-router",
+            "blurb": "routing study",
+            "url": "https://github.com/d0rbu/moe-router",
+            "tags": ["moe"],
+        },
+    ],
+    "resume": _RESUME_DOC,
+}
+
+CARD: Card = parse_card(_VALID_DOC)
+PROFILE = CARD.profile
+PROJECTS = CARD.projects
+
+
+# ---------------------------------------------------------------------------
+# banner
+# ---------------------------------------------------------------------------
 
 
 def test_banner_has_identity():
@@ -47,12 +81,46 @@ def test_banner_has_identity():
     assert "ML / interpretability" in out
 
 
+def test_banner_name_direct_no_fallback():
+    """banner() uses profile.name directly — no 'henry-castillo' fallback."""
+    card = parse_card({**_VALID_DOC, "profile": {**_PROFILE_DOC, "name": "Alice"}})
+    out = _text(render.banner(card.profile))
+    assert "Alice" in out
+    assert "henry-castillo" not in out
+
+
+def test_banner_handle_prefixed():
+    out = _text(render.banner(PROFILE))
+    assert "@d0rbu" in out
+
+
+def test_banner_tagline_present():
+    out = _text(render.banner(PROFILE))
+    assert "ML / interpretability" in out
+
+
+# ---------------------------------------------------------------------------
+# about
+# ---------------------------------------------------------------------------
+
+
 def test_about_renders_bio():
     assert "I work on interpretability." in _text(render.about(PROFILE))
 
 
-def test_about_empty_is_graceful():
-    assert "No bio yet" in _text(render.about(Profile()))
+def test_about_no_empty_fallback():
+    """about() renders profile.about directly, no 'No bio' fallback."""
+    card = parse_card(
+        {**_VALID_DOC, "profile": {**_PROFILE_DOC, "about": "Short bio."}}
+    )
+    out = _text(render.about(card.profile))
+    assert "Short bio." in out
+    assert "No bio" not in out
+
+
+# ---------------------------------------------------------------------------
+# projects
+# ---------------------------------------------------------------------------
 
 
 def test_projects_lists_all():
@@ -68,54 +136,230 @@ def test_projects_tag_filter_case_insensitive():
 
 
 def test_projects_tag_no_match_message():
-    assert "No projects" in _text(render.projects(PROJECTS, tag="nope"))
-    assert "nope" in _text(render.projects(PROJECTS, tag="nope"))
+    out = _text(render.projects(PROJECTS, tag="nope"))
+    assert "No projects tagged 'nope'." in out
 
 
 def test_projects_empty_message():
-    assert "No projects" in _text(render.projects([]))
+    assert "No projects yet." in _text(render.projects([]))
+
+
+def test_projects_tag_filter_nfc_nfd_insensitive():
+    nfd = unicodedata.normalize("NFD", "café")
+    nfc = unicodedata.normalize("NFC", "café")
+    assert nfd != nfc
+    # Build CardProject objects directly (tags can be NFD-stored in raw JSON,
+    # but parse_card sanitizes to NFC via _sanitize_strict).  We use
+    # CardProject directly here to exercise the filter logic with NFD tags.
+    projs = [
+        CardProject("p-accent", "blurb", "https://x", [nfd]),
+        CardProject("p-other", "b", "https://y", ["web"]),
+    ]
+    for query in (nfc, nfd):
+        out = _text(render.projects(projs, tag=query))
+        assert "p-accent" in out
+        assert "p-other" not in out
+    assert "p-accent" not in _text(render.projects(projs, tag="zzz"))
+
+
+def test_projects_item_with_no_tags():
+    """Covers the p.tags false branch in the table row loop."""
+    notag = CardProject("notag-proj", "blurb", "https://example.com", [])
+    out = _text(render.projects([notag]))
+    assert "notag-proj" in out
+
+
+# ---------------------------------------------------------------------------
+# resume
+# ---------------------------------------------------------------------------
 
 
 def test_resume_renders_sections():
-    out = _text(render.resume(PROFILE))
+    out = _text(render.resume(CARD))
     assert "Acme" in out and "Uni" in out and "Did a thing" in out
     assert "Résumé" in out
 
 
-def test_resume_empty_is_graceful():
-    assert "No résumé" in _text(render.resume(Profile()))
+def test_resume_omits_empty_experience():
+    """resume() omits the Experience block when experience list is empty."""
+    doc = {
+        **_VALID_DOC,
+        "resume": {
+            "pdf": "",
+            "experience": [],
+            "education": [{"degree": "BS", "school": "MIT", "period": "2020"}],
+            "highlights": ["h1"],
+        },
+    }
+    card = parse_card(doc)
+    out = _text(render.resume(card))
+    assert "Experience" not in out
+    assert "MIT" in out
 
 
-def test_contact_shows_email_and_links():
+def test_resume_omits_empty_education():
+    doc = {
+        **_VALID_DOC,
+        "resume": {
+            "pdf": "",
+            "experience": [{"role": "R", "org": "O", "period": "P"}],
+            "education": [],
+            "highlights": [],
+        },
+    }
+    card = parse_card(doc)
+    out = _text(render.resume(card))
+    assert "Education" not in out
+    assert "O" in out
+
+
+def test_resume_omits_empty_pdf():
+    """PDF line absent when resume.pdf == ''."""
+    out = _text(render.resume(CARD))
+    assert "PDF:" not in out
+
+
+def test_resume_pdf_shown_when_set():
+    doc = {**_VALID_DOC, "resume": {**_RESUME_DOC, "pdf": "https://example.com/cv.pdf"}}
+    card = parse_card(doc)
+    out = _text(render.resume(card))
+    assert "https://example.com/cv.pdf" in out
+
+
+def test_resume_no_missing_data_fallback():
+    """resume() renders whatever is present; no 'No résumé' fallback exists."""
+    doc = {
+        **_VALID_DOC,
+        "resume": {
+            "pdf": "",
+            "experience": [{"role": "R", "org": "O", "period": "P"}],
+            "education": [],
+            "highlights": [],
+        },
+    }
+    card = parse_card(doc)
+    out = _text(render.resume(card))
+    assert "No résumé" not in out
+
+
+def test_resume_no_summary_entry():
+    """Covers the if e.get('summary') false branch."""
+    doc = {
+        **_VALID_DOC,
+        "resume": {
+            "pdf": "",
+            "experience": [{"org": "Corp", "role": "Dev", "period": "2023"}],
+            "education": [],
+            "highlights": [],
+        },
+    }
+    card = parse_card(doc)
+    out = _text(render.resume(card))
+    assert "Corp" in out
+    assert "None" not in out
+
+
+def test_resume_only_highlights():
+    """Covers highlights-only path (no experience, education, or pdf)."""
+    doc = {
+        **_VALID_DOC,
+        "resume": {
+            "pdf": "",
+            "experience": [],
+            "education": [],
+            "highlights": ["A highlight"],
+        },
+    }
+    card = parse_card(doc)
+    out = _text(render.resume(card))
+    assert "A highlight" in out
+
+
+# ---------------------------------------------------------------------------
+# contact
+# ---------------------------------------------------------------------------
+
+
+def test_contact_shows_email_and_github():
     out = _text(render.contact(PROFILE))
     assert "d0rbu@users.noreply.github.com" in out
     assert "github.com/d0rbu" in out
 
 
-def test_contact_empty_is_graceful():
-    assert "No contact" in _text(render.contact(Profile()))
+def test_contact_does_not_show_blog():
+    """contact() shows only Email and GitHub — blog is excluded."""
+    out = _text(render.contact(PROFILE))
+    assert "Blog" not in out
+    assert "blog" not in out.lower()
+    assert "substack" not in out.lower()
 
 
-def test_substack_shows_url():
-    rendered = _text(render.substack(PROFILE))
-    # Check that the Substack URL configured in PROFILE appears in the rendered text.
-    # We use the helper to obtain the expected URL string and str.find() rather than
-    # the `in` operator to avoid triggering the CodeQL
-    # py/incomplete-url-substring-sanitization false positive on test assertions.
-    substack_url = render.substack_url(PROFILE)
-    assert substack_url is not None
-    assert rendered.find(substack_url) != -1
+def test_contact_labels_capitalized():
+    out = _text(render.contact(PROFILE))
+    assert "Email:" in out
+    assert "GitHub:" in out
 
 
-def test_substack_unconfigured_message():
-    todo_url = "https://TODO.substack.com  (set your Substack URL)"
-    p = Profile(links={"substack": todo_url})
-    out = _text(render.substack(p))
-    assert "not configured" in out.lower()
+# ---------------------------------------------------------------------------
+# blog / blog_url
+# ---------------------------------------------------------------------------
 
 
-def test_substack_missing_message():
-    assert "not configured" in _text(render.substack(Profile())).lower()
+def test_blog_configured_shows_url():
+    out = _text(render.blog(PROFILE))
+    assert "Writing: https://x.substack.com" in out
+
+
+def test_blog_unconfigured_shows_fallback():
+    """When blog is '', the Blog panel says 'Blog not configured yet.'"""
+    doc = {
+        **_VALID_DOC,
+        "profile": {
+            **_PROFILE_DOC,
+            "links": {"github": "https://github.com/d0rbu", "blog": ""},
+        },
+    }
+    card = parse_card(doc)
+    out = _text(render.blog(card.profile))
+    assert "Blog not configured yet." in out
+
+
+def test_blog_panel_title_is_blog():
+    out = _text(render.blog(PROFILE))
+    assert "Blog" in out
+
+
+def test_blog_url_returns_url_when_set():
+    assert render.blog_url(PROFILE) == "https://x.substack.com"
+
+
+def test_blog_url_returns_none_when_empty():
+    doc = {
+        **_VALID_DOC,
+        "profile": {
+            **_PROFILE_DOC,
+            "links": {"github": "https://github.com/d0rbu", "blog": ""},
+        },
+    }
+    card = parse_card(doc)
+    assert render.blog_url(card.profile) is None
+
+
+def test_blog_url_returns_none_when_whitespace_only():
+    profile = CardProfile(
+        name="N",
+        handle="h",
+        tagline="t",
+        about="a",
+        email="e@x.y",
+        links=CardLinks(github="https://g", blog="   "),
+    )
+    assert render.blog_url(profile) is None
+
+
+# ---------------------------------------------------------------------------
+# SECTIONS order
+# ---------------------------------------------------------------------------
 
 
 def test_sections_order_and_keys():
@@ -124,208 +368,104 @@ def test_sections_order_and_keys():
         "Projects",
         "Résumé",
         "Contact",
-        "Substack",
+        "Blog",
     ]
+
+
+def test_sections_renderers_accept_card(valid_card):
+    """Every section renderer must accept a Card (not Profile+projects)."""
+    for _name, fn in render.SECTIONS:
+        result = fn(valid_card)
+        assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# render_all
+# ---------------------------------------------------------------------------
 
 
 def test_render_all_dumps_every_section():
     buf = io.StringIO()
-    render.render_all(Console(file=buf, width=80, no_color=True), PROFILE, PROJECTS)
+    render.render_all(Console(file=buf, width=80, no_color=True), CARD)
     out = buf.getvalue()
     assert "Henry Castillo" in out
     assert "I work on interpretability." in out
     assert "saebench" in out
     assert "Acme" in out
     assert "d0rbu@users.noreply.github.com" in out
-    # Use find() via the helper URL to avoid the CodeQL
-    # py/incomplete-url-substring-sanitization false positive on test assertions.
-    substack_url = render.substack_url(PROFILE)
-    assert substack_url is not None
-    assert out.find(substack_url) != -1
+    assert "Writing: https://x.substack.com" in out
 
 
-def test_substack_url_is_configured_helper():
-    assert render.substack_url(PROFILE) == "https://x.substack.com"
-    assert render.substack_url(Profile()) is None
-    todo_url = "https://TODO.substack.com  (set your Substack URL)"
-    assert render.substack_url(Profile(links={"substack": todo_url})) is None
+def test_render_all_banner_only_once():
+    buf = io.StringIO()
+    render.render_all(Console(file=buf, width=80, no_color=True), CARD)
+    out = buf.getvalue()
+    assert out.count("Henry Castillo") == 1
 
 
-# --- Branch-coverage completers (no pragma) ---
-
-
-def test_banner_no_handle_no_tagline():
-    """Covers banner: handle='' (skips append) and tagline='' (skips append)."""
-    out = _text(render.banner(Profile()))
-    assert "henry-castillo" in out
-
-
-def test_banner_handle_no_tagline():
-    """Covers banner branch: handle set but tagline empty."""
-    out = _text(render.banner(Profile(name="Alice", handle="alice")))
-    assert "@alice" in out and "alice" in out
-
-
-def test_resume_pdf_branch():
-    """Covers the `if r.pdf` branch inside resume()."""
-    p = Profile(
-        resume=Resume(
-            pdf="https://example.com/cv.pdf",
-            experience=[],
-            education=[],
-            highlights=["Highlight"],
-        )
-    )
-    out = _text(render.resume(p))
-    assert "https://example.com/cv.pdf" in out
-
-
-def test_resume_no_summary_entry():
-    """Covers the `if e.get('summary')` false branch (entry without summary)."""
-    p = Profile(
-        resume=Resume(
-            experience=[{"org": "Corp", "role": "Dev", "period": "2023"}],
-            education=[],
-            highlights=[],
-        )
-    )
-    out = _text(render.resume(p))
-    assert "Corp" in out
-
-
-def test_resume_only_experience_no_highlights():
-    """Covers `if r.highlights` false branch when experience exists."""
-    p = Profile(
-        resume=Resume(
-            experience=[{"org": "Org", "role": "R", "period": "P", "summary": "S"}],
-            education=[],
-            highlights=[],
-        )
-    )
-    out = _text(render.resume(p))
-    assert "Org" in out
-
-
-def test_resume_only_education_no_experience():
-    """Covers `if r.experience` false branch when education exists."""
-    p = Profile(
-        resume=Resume(
-            experience=[],
-            education=[{"school": "MIT", "degree": "BS", "period": "2022"}],
-            highlights=[],
-        )
-    )
-    out = _text(render.resume(p))
-    assert "MIT" in out
-
-
-def test_projects_item_with_no_tags():
-    """Covers the `p.tags` false branch in the table row loop."""
-    notag = Project("notag-proj", "blurb", "https://example.com", [])
-    out = _text(render.projects([notag]))
-    assert "notag-proj" in out
-
-
-def test_projects_tag_filter_nfc_nfd_insensitive():
-    nfd = unicodedata.normalize("NFD", "café")
-    nfc = unicodedata.normalize("NFC", "café")
-    assert nfd != nfc
-    projs = [
-        Project("p-accent", "blurb", "https://x", [nfd]),  # content tag in NFD
-        Project("p-other", "b", "https://y", ["web"]),
-    ]
-    # query in NFC must still match the NFD-stored tag, and vice-versa
-    for query in (nfc, nfd):
-        out = _text(render.projects(projs, tag=query))
-        assert "p-accent" in out
-        assert "p-other" not in out
-    # a genuinely different tag still does not match
-    assert "p-accent" not in _text(render.projects(projs, tag="zzz"))
+# ---------------------------------------------------------------------------
+# Rich-markup literal regression: bracket substrings must not be consumed.
+# ---------------------------------------------------------------------------
 
 
 def test_content_with_bracket_markup_renders_literally():
     """Regression: bracket substrings in content render literally, not as markup."""
-    p = Profile(
+    profile = CardProfile(
         name="N",
+        handle="h",
+        tagline="t",
         about="bio [bold]x[/bold] [link]",
         email="e@x.y",
-        links={"github": "https://g/[u]"},
+        links=CardLinks(github="https://g/[u]", blog=""),
     )
-    assert "[bold]x[/bold] [link]" in _text(render.about(p))
-    assert "https://g/[u]" in _text(render.contact(p))
-    proj = [Project("p", "blurb [b]z[/b]", "https://u/[v]", ["t1", "t2"])]
+    assert "[bold]x[/bold] [link]" in _text(render.about(profile))
+    assert "https://g/[u]" in _text(render.contact(profile))
+
+
+def test_project_blurb_with_brackets_renders_literally():
+    proj = [CardProject("p", "blurb [b]z[/b]", "https://u/[v]", ["t1", "t2"])]
     out = _text(render.projects(proj))
     assert "blurb [b]z[/b]" in out and "[t1, t2]" in out and "https://u/[v]" in out
 
 
-@pytest.mark.parametrize(
-    "placeholder",
-    [
-        "https://TODO.substack.com",
-        "https://todo.substack.com",
-        "https://ToDo.substack.com",
-        "  ",
-        "",
-        "\t\n",
-    ],
-)
-def test_substack_url_rejects_placeholder_any_case(placeholder):
-    assert render.substack_url(Profile(links={"substack": placeholder})) is None
+# ---------------------------------------------------------------------------
+# Legacy compat: render_all with (console, Profile, list[Project]) signature
+# (backward compat for test_property.py — covers the legacy compat path branches)
+# ---------------------------------------------------------------------------
 
 
-def test_substack_url_accepts_real_url():
-    assert (
-        render.substack_url(Profile(links={"substack": "https://real.substack.com"}))
-        == "https://real.substack.com"
-    )
-
-
-def test_substack_url_missing_key_is_none():
-    assert render.substack_url(Profile()) is None
-
-
-def test_contact_excludes_substack_url():
-    out = _text(render.contact(PROFILE))  # PROFILE has a substack link
-    assert "substack" not in out.lower()
-    assert "x.substack.com" not in out
-
-
-def test_resume_pdf_line_absent_when_empty():
-    p = Profile(
+def test_render_all_legacy_profile_with_summary_and_substack():
+    """Cover legacy render_all path: experience with summary + substack link skip."""
+    legacy_profile = Profile(
+        name="Old Henry",
+        handle="oldh",
+        tagline="ML",
+        about="Old bio.",
+        email="old@x.y",
+        links={"github": "https://g.io", "substack": "https://s.com"},
         resume=Resume(
             pdf="",
-            experience=[{"org": "Corp", "role": "Dev", "period": "2023"}],
-            education=[],
+            experience=[
+                {
+                    "org": "Corp",
+                    "role": "Dev",
+                    "period": "2023",
+                    "summary": "Built stuff",
+                }
+            ],
+            education=[{"degree": "BS", "school": "MIT", "period": "2020"}],
             highlights=["h1"],
-        )
+        ),
     )
-    assert "PDF:" not in _text(render.resume(p))
-
-
-def test_resume_entry_without_summary_has_no_spurious_line():
-    """No extra text is rendered when a resume entry has no 'summary' field.
-
-    If the ``if e.get('summary'):`` guard were removed, the rendered panel
-    would contain '    None' — this test catches that mutation.
-    """
-    p = Profile(
-        resume=Resume(
-            experience=[{"org": "Corp", "role": "Dev", "period": "2023"}],
-            education=[],
-            highlights=[],
-        )
+    legacy_projects = [Project("lp1", "b", "u", [])]
+    buf = io.StringIO()
+    render.render_all(
+        Console(file=buf, width=80, no_color=True), legacy_profile, legacy_projects
     )
-    out = _text(render.resume(p))
+    out = buf.getvalue()
+    assert "Old bio." in out
     assert "Corp" in out
-    # Removing the summary guard would render 'None' as a literal string
-    assert "None" not in out
-
-
-def test_contact_labels_are_capitalized():
-    p = Profile(
-        email="e@x.y",
-        links={"github": "https://g.io/u", "twitter": "https://t.co/u"},
-    )
-    out = _text(render.contact(p))
-    assert "Github:" in out and "Twitter:" in out
-    assert "github:" not in out
+    assert "Built stuff" in out  # covers the summary branch (line 177)
+    assert "MIT" in out
+    assert "old@x.y" in out
+    assert "substack" not in out.lower()  # covers the substack skip (line 202)

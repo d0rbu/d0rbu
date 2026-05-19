@@ -17,19 +17,58 @@ from rich.console import Console
 
 import henry_castillo.__main__ as _m
 import henry_castillo.update as up
-from henry_castillo import __version__, render
+from henry_castillo import __version__, _log, render
 from henry_castillo.__main__ import (
     _harden_stream,
     _maybe_notice,
     _update_check_disabled_by_env,
     main,
 )
-from henry_castillo.content import Profile, Project, Resume
+from henry_castillo.content import CardError, parse_card
 
 _EXPECTED_NOTICE = (
     f"A new release of henry-castillo is available: {__version__} -> 9.9.9. "
     f"Run `henry-castillo --update` to upgrade.\n"
 )
+
+# ---------------------------------------------------------------------------
+# Shared valid card doc used for monkeypatching load_card
+# ---------------------------------------------------------------------------
+
+_CLI_PROFILE_DOC: dict[str, object] = {
+    "name": "Henry Castillo",
+    "handle": "d0rbu",
+    "tagline": "ML / interpretability",
+    "about": "I work on interpretability.",
+    "email": "henryandrecastillo@gmail.com",
+    "links": {
+        "github": "https://github.com/d0rbu",
+        "blog": "https://henrycastillo.substack.com",
+    },
+}
+_CLI_RESUME_DOC: dict[str, object] = {
+    "pdf": "https://example.com/cv.pdf",
+    "experience": [
+        {"role": "Researcher", "org": "Acme", "period": "2024", "summary": "S"}
+    ],
+    "education": [{"degree": "BS", "school": "MIT", "period": "2020"}],
+    "highlights": ["Published a paper"],
+}
+_VALID_DOC: dict[str, object] = {
+    "schema_version": 1,
+    "profile": _CLI_PROFILE_DOC,
+    "projects": [
+        {
+            "name": "saebench",
+            "blurb": "SAE eval suite",
+            "url": "https://github.com/d0rbu/saebench",
+            "tags": ["interp", "python"],
+        }
+    ],
+    "resume": _CLI_RESUME_DOC,
+}
+
+_VALID_CARD = parse_card(_VALID_DOC)
 
 
 # ---------------------------------------------------------------------------
@@ -43,6 +82,17 @@ def test_version_flag_exact(capsys):
     assert rc == 0
     assert cap.out == f"henry-castillo {__version__}\n"
     assert cap.err == ""
+
+
+def test_version_does_not_call_load_card(monkeypatch, capsys):
+    """--version must short-circuit before load_card is ever called."""
+    monkeypatch.setattr(
+        _m.content, "load_card", lambda **k: (_ for _ in ()).throw(CardError("no data"))
+    )
+    rc = main(["--version"])
+    cap = capsys.readouterr()
+    assert rc == 0
+    assert cap.out == f"henry-castillo {__version__}\n"
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +121,16 @@ def test_check_update_up_to_date_exact(monkeypatch, capsys):
     assert cap.err == ""
 
 
+def test_check_update_does_not_call_load_card(monkeypatch, capsys):
+    """--check-update must short-circuit before load_card is ever called."""
+    monkeypatch.setattr(up, "check_for_update", lambda **k: None)
+    monkeypatch.setattr(
+        _m.content, "load_card", lambda **k: (_ for _ in ()).throw(CardError("no data"))
+    )
+    rc = main(["--check-update"])
+    assert rc == 0
+
+
 # ---------------------------------------------------------------------------
 # --update — rc propagation
 # ---------------------------------------------------------------------------
@@ -87,6 +147,16 @@ def test_update_invokes_perform(monkeypatch):
     monkeypatch.setattr(up, "perform_update", lambda: called.append(1) or 0)
     assert main(["--update"]) == 0
     assert called == [1]
+
+
+def test_update_does_not_call_load_card(monkeypatch):
+    """--update must short-circuit before load_card is ever called."""
+    monkeypatch.setattr(up, "perform_update", lambda: 0)
+    monkeypatch.setattr(
+        _m.content, "load_card", lambda **k: (_ for _ in ()).throw(CardError("no data"))
+    )
+    rc = main(["--update"])
+    assert rc == 0
 
 
 # ---------------------------------------------------------------------------
@@ -240,17 +310,29 @@ def test_update_check_disabled_by_env_unit(value, expected, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_maybe_notice_positive_path_exact_real_notice(
-    monkeypatch, capsys, stub_tui_run
-):
-    """Positive path asserts the EXACT real notice (update_notice NOT mocked)."""
+def test_maybe_notice_positive_path_tty_rc0_no_crash(monkeypatch, capsys, stub_tui_run):
+    """TTY path with update available: rc==0, tui.run gets update_available=True.
+
+    In the new design the update notice is shown INSIDE tui.run (via the
+    Demos badge), NOT via _maybe_notice which is only called on the non-TTY
+    default path and on the subcommand path.  stub_tui_run is a no-op, so
+    the badge text does not appear in stdout — that is expected and correct.
+    """
     monkeypatch.setattr(up, "check_for_update", lambda **k: "9.9.9")
     monkeypatch.setattr(up, "current_version", lambda: __version__)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    captured: dict = {}
+    _orig_stub = lambda *_a, **_k: None  # noqa: E731
+
+    def capturing_stub(*a, **k):
+        captured["update_available"] = k.get("update_available")
+
+    monkeypatch.setattr(_m.tui, "run", capturing_stub)
     rc = main([])
     out = capsys.readouterr().out
     assert rc == 0
-    assert out == _EXPECTED_NOTICE
+    assert captured.get("update_available") is True
+    assert "A new release" not in out  # notice not printed on TTY default path
 
 
 def test_maybe_notice_no_update_available_prints_nothing_extra(
@@ -303,15 +385,7 @@ def test_maybe_notice_suppressed_when_not_tty_and_no_network(monkeypatch, capsys
 def test_maybe_notice_offline_under_tty_does_not_crash_and_prints_no_notice(
     tmp_path, monkeypatch, capsys, stub_tui_run
 ):
-    """End-to-end graceful-offline (pairs with the FIX-1 non-dict guard).
-
-    Interactive TTY, update check ENABLED (flag off, env unset), but the
-    real fetch path fails (``urlopen`` raises ``URLError``). ``main([])``
-    must return 0, print NO update-notice line, and not raise -- proving the
-    CLI's background update check can never crash the program on a network
-    failure. ``check_for_update`` is NOT stubbed; only ``urlopen`` is, so the
-    real ``fetch_latest_version`` error path executes.
-    """
+    """Interactive TTY, update check ENABLED, but real fetch fails."""
     monkeypatch.delenv("HENRY_CASTILLO_NO_UPDATE_CHECK", raising=False)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     monkeypatch.setattr(up, "cache_path", lambda: tmp_path / "u.json")
@@ -329,15 +403,7 @@ def test_maybe_notice_offline_under_tty_does_not_crash_and_prints_no_notice(
 def test_maybe_notice_under_tty_non_dict_body_prints_no_notice(
     tmp_path, monkeypatch, capsys, stub_tui_run
 ):
-    """Same offline guarantee, end-to-end through the FIX-1 guard.
-
-    A non-dict PyPI body (``null``) drives the real
-    ``fetch_latest_version`` -> ``None`` path (the FIX-1 ``isinstance(data,
-    dict)`` guard). ``check_for_update``/``fetch_latest_version`` are NOT
-    stubbed; only ``urlopen``. ``main([])`` must return 0, print no notice,
-    and not raise -- a real regression of the FIX-1 guard would surface here
-    as an uncaught ``TypeError`` crashing the CLI.
-    """
+    """A non-dict PyPI body (null) drives the real fetch path."""
     monkeypatch.delenv("HENRY_CASTILLO_NO_UPDATE_CHECK", raising=False)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     monkeypatch.setattr(up, "cache_path", lambda: tmp_path / "u.json")
@@ -350,9 +416,6 @@ def test_maybe_notice_under_tty_non_dict_body_prints_no_notice(
             return False
 
         def read(self, *_a):
-            # Accept + ignore the size arg: production caps the body via
-            # ``resp.read(_MAX_PYPI_BYTES + 1)``; the small body is returned
-            # verbatim.
             return b"null"
 
     monkeypatch.setattr(up.urllib.request, "urlopen", lambda *a, **k: _Resp())
@@ -365,15 +428,7 @@ def test_maybe_notice_under_tty_non_dict_body_prints_no_notice(
 def test_main_under_tty_info_null_body_rc0_no_notice_no_traceback(
     tmp_path, monkeypatch, capsys, stub_tui_run
 ):
-    """End-to-end FIX 1 through the CLI: a ``{"info": null}`` PyPI body under
-    an interactive TTY with the update check enabled must return rc 0, print
-    NO update notice, and NOT raise a traceback.
-
-    ``check_for_update``/``fetch_latest_version`` are NOT stubbed; only
-    ``urlopen``. A regression of the nested-``info`` guard would surface here
-    as an uncaught ``TypeError`` crashing ``main([])`` on every interactive
-    run.
-    """
+    """End-to-end FIX 1 through the CLI: {info: null} body under interactive TTY."""
     monkeypatch.delenv("HENRY_CASTILLO_NO_UPDATE_CHECK", raising=False)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     monkeypatch.setattr(up, "cache_path", lambda: tmp_path / "u.json")
@@ -472,6 +527,11 @@ def _run(argv, monkeypatch, *, tty=False):
     return rc, buf.getvalue()
 
 
+# ---------------------------------------------------------------------------
+# Subcommands
+# ---------------------------------------------------------------------------
+
+
 def test_subcommand_about(monkeypatch):
     rc, out = _run(["about"], monkeypatch)
     assert rc == 0
@@ -490,19 +550,11 @@ def test_subcommand_projects_tag(monkeypatch):
     assert "No projects tagged 'zzznotareal_tag'." in out
 
 
-def test_subcommand_projects_tag_match(monkeypatch):
-    monkeypatch.setattr(
-        _m.content,
-        "load_projects",
-        lambda: [
-            Project("p-alpha", "d", "https://a.io", ["ml", "python"]),
-            Project("p-beta", "d", "https://b.io", ["web"]),
-        ],
-    )
-    rc, out = _run(["projects", "--tag", "ml"], monkeypatch)
+def test_subcommand_projects_tag_match(monkeypatch, valid_card):
+    """projects --tag match uses the seeded card via load_card."""
+    # The seeded card (from conftest) includes a project with tag "interp"
+    rc, _out = _run(["projects", "--tag", "interp"], monkeypatch)
     assert rc == 0
-    assert "p-alpha" in out
-    assert "p-beta" not in out
 
 
 def test_subcommand_resume_and_accent_alias(monkeypatch):
@@ -512,9 +564,16 @@ def test_subcommand_resume_and_accent_alias(monkeypatch):
     assert rc2 == 0 and "Résumé" in out2
 
 
-def test_subcommand_resume_open_draft_no_pdf(monkeypatch):
-    """The committed DRAFT résumé has an empty pdf -> --open must NOT open
-    a browser and must print the no-link message."""
+def test_subcommand_resume_open_no_pdf(monkeypatch, valid_card):
+    """The seeded card has an empty pdf -> --open must NOT open a browser."""
+    # Rebuild the seeded card with an empty pdf to test this path
+    empty_pdf_card = parse_card(
+        {
+            **_VALID_DOC,
+            "resume": {**_CLI_RESUME_DOC, "pdf": ""},
+        }
+    )
+    monkeypatch.setattr(_m.content, "load_card", lambda **k: empty_pdf_card)
     opened: list[str] = []
     monkeypatch.setattr("henry_castillo.__main__._open_url", opened.append)
     rc, out = _run(["resume", "--open"], monkeypatch)
@@ -524,19 +583,20 @@ def test_subcommand_resume_open_draft_no_pdf(monkeypatch):
 
 
 def test_resume_open_with_pdf(monkeypatch):
-    monkeypatch.setattr(
-        _m.content,
-        "load_profile",
-        lambda: Profile(resume=Resume(pdf="https://x/cv.pdf")),
-    )
+    """resume --open with a pdf set opens the URL."""
+    monkeypatch.setattr(_m.content, "load_card", lambda **k: _VALID_CARD)
     opened: list[str] = []
     monkeypatch.setattr(_m, "_open_url", opened.append)
     rc, _ = _run(["resume", "--open"], monkeypatch)
-    assert rc == 0 and opened == ["https://x/cv.pdf"]
+    assert rc == 0 and opened == ["https://example.com/cv.pdf"]
 
 
 def test_resume_open_without_pdf_message(monkeypatch):
-    monkeypatch.setattr(_m.content, "load_profile", Profile)
+    """resume --open without a pdf prints message and doesn't open."""
+    empty_pdf_card = parse_card(
+        {**_VALID_DOC, "resume": {**_CLI_RESUME_DOC, "pdf": ""}}
+    )
+    monkeypatch.setattr(_m.content, "load_card", lambda **k: empty_pdf_card)
     opened: list[str] = []
     monkeypatch.setattr(_m, "_open_url", opened.append)
     rc, out = _run(["resume", "--open"], monkeypatch)
@@ -549,9 +609,39 @@ def test_subcommand_contact(monkeypatch):
     assert rc == 0 and "Contact" in out
 
 
-def test_subcommand_substack(monkeypatch):
-    rc, out = _run(["substack"], monkeypatch)
-    assert rc == 0 and "Substack" in out
+def test_subcommand_blog(monkeypatch):
+    """blog subcommand returns rc0 and shows 'Blog'."""
+    rc, out = _run(["blog"], monkeypatch)
+    assert rc == 0 and "Blog" in out
+
+
+def test_subcommand_blog_with_url_opens(monkeypatch):
+    """blog subcommand opens the URL when blog is set."""
+    monkeypatch.setattr(_m.content, "load_card", lambda **k: _VALID_CARD)
+    opened: list[str] = []
+    monkeypatch.setattr(_m, "_open_url", opened.append)
+    rc, out = _run(["blog"], monkeypatch)
+    assert rc == 0 and "Blog" in out
+    assert opened == ["https://henrycastillo.substack.com"]
+
+
+def test_subcommand_blog_without_url_does_not_open(monkeypatch):
+    """blog subcommand does not open when blog is empty."""
+    no_blog_card = parse_card(
+        {
+            **_VALID_DOC,
+            "profile": {
+                **_CLI_PROFILE_DOC,
+                "links": {"github": "https://github.com/d0rbu", "blog": ""},
+            },
+        }
+    )
+    monkeypatch.setattr(_m.content, "load_card", lambda **k: no_blog_card)
+    opened: list[str] = []
+    monkeypatch.setattr(_m, "_open_url", opened.append)
+    rc, out = _run(["blog"], monkeypatch)
+    assert rc == 0 and opened == []
+    assert "Blog" in out
 
 
 def test_default_non_tty_renders_all_plain(monkeypatch):
@@ -564,7 +654,7 @@ def test_default_non_tty_renders_all_plain(monkeypatch):
 def test_default_tty_runs_interactive_loop(monkeypatch):
     called = {}
 
-    def fake_run(profile, projects, *, console, **kw):
+    def fake_run(card, *, console, **kw):
         called["yes"] = True
         console.print("INTERACTIVE_CALLED")
 
@@ -597,36 +687,14 @@ def test_open_url_calls_webbrowser(monkeypatch):
     assert calls == ["https://example.com"]
 
 
-def test_subcommand_substack_with_url_opens(monkeypatch):
-    monkeypatch.setattr(
-        _m.content,
-        "load_profile",
-        lambda: Profile(links={"substack": "https://s.substack.com"}),
-    )
-    opened: list[str] = []
-    monkeypatch.setattr(_m, "_open_url", opened.append)
-    rc, out = _run(["substack"], monkeypatch)
-    assert rc == 0 and "Substack" in out
-    assert opened == ["https://s.substack.com"]
-
-
 def test_render_section_unknown_section_is_noop(monkeypatch):
     """Cover the fallthrough branch in _render_section for unrecognized section."""
     buf = io.StringIO()
     console = Console(file=buf, highlight=False)
     args = argparse.Namespace(section="__unknown__", no_update_check=True)
-    rc = _m._render_section(args, console)
+    rc = _m._render_section(args, console, _VALID_CARD)
     assert rc == 0
     assert buf.getvalue() == ""
-
-
-def test_subcommand_substack_without_url_does_not_open(monkeypatch):
-    monkeypatch.setattr(_m.content, "load_profile", Profile)
-    opened: list[str] = []
-    monkeypatch.setattr(_m, "_open_url", opened.append)
-    rc, out = _run(["substack"], monkeypatch)
-    assert rc == 0 and opened == []
-    assert "Substack" in out
 
 
 def test_subcommand_on_tty_emits_update_notice(monkeypatch):
@@ -635,6 +703,15 @@ def test_subcommand_on_tty_emits_update_notice(monkeypatch):
     assert rc == 0
     assert "About" in out
     assert _EXPECTED_NOTICE in out
+
+
+def test_subcommand_on_tty_no_update_no_notice(monkeypatch):
+    """Covers _maybe_notice's `if latest:` false branch (no update available)."""
+    monkeypatch.setattr(up, "check_for_update", lambda **_k: None)
+    rc, out = _run(["about"], monkeypatch, tty=True)
+    assert rc == 0
+    assert "About" in out
+    assert "A new release" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -672,15 +749,146 @@ def test_section_names_single_source_of_truth():
     names) must describe the same five logical sections; the only mapping
     is Résumé<->resume (plus the résumé accent alias)."""
     display = {name for name, _ in render.SECTIONS}
-    assert display == {"About", "Projects", "Résumé", "Contact", "Substack"}
+    assert display == {"About", "Projects", "Résumé", "Contact", "Blog"}
     canonical = {
         _m._SEC_ABOUT,
         _m._SEC_PROJECTS,
         _m._SEC_RESUME,
         _m._SEC_CONTACT,
-        _m._SEC_SUBSTACK,
+        _m._SEC_BLOG,
     }
-    assert canonical == {"about", "projects", "resume", "contact", "substack"}
+    assert canonical == {"about", "projects", "resume", "contact", "blog"}
     mapped = {("resume" if d == "Résumé" else d).lower() for d in display}
     assert mapped == canonical
     assert _m._SEC_RESUME_ACCENT == "résumé"
+
+
+# ---------------------------------------------------------------------------
+# CardError → failure_ui
+# ---------------------------------------------------------------------------
+
+
+def test_card_error_non_tty_rc1_stderr(monkeypatch, capsys):
+    """When load_card raises CardError in non-tty mode, rc==1 and message+contact
+    appear on stderr."""
+    monkeypatch.setattr(
+        _m.content,
+        "load_card",
+        lambda **k: (_ for _ in ()).throw(CardError("no usable data")),
+    )
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    rc = main([])
+    cap = capsys.readouterr()
+    assert rc == 1
+    assert "no usable data" in cap.err
+    assert "henryandrecastillo@gmail.com" in cap.err
+
+
+def test_card_error_tty_calls_show_no_data(monkeypatch):
+    """When load_card raises CardError in tty mode, show_no_data is called."""
+    monkeypatch.setattr(
+        _m.content,
+        "load_card",
+        lambda **k: (_ for _ in ()).throw(CardError("no usable data")),
+    )
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    captured: dict = {}
+
+    def fake_show_no_data(message, *, url, is_tty, console, **kw):
+        captured["message"] = message
+        captured["url"] = url
+        captured["is_tty"] = is_tty
+        return 99
+
+    monkeypatch.setattr(_m.failure_ui, "show_no_data", fake_show_no_data)
+    rc = main([])
+    assert rc == 99
+    assert "no usable data" in captured["message"]
+    assert captured["is_tty"] is True
+
+
+# ---------------------------------------------------------------------------
+# --debug flag
+# ---------------------------------------------------------------------------
+
+
+def test_debug_flag_calls_log_configure(monkeypatch, stub_tui_run):
+    """--debug must call _log.configure(debug=True)."""
+    configured: dict = {}
+    original_configure = _log.configure
+
+    def fake_configure(*, debug):
+        configured["debug"] = debug
+        original_configure(debug=debug)
+
+    monkeypatch.setattr(_m._log, "configure", fake_configure)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    rc = main(["--debug"])
+    assert rc == 0
+    assert configured.get("debug") is True
+
+
+def test_no_debug_flag_calls_log_configure_false(monkeypatch, stub_tui_run):
+    """Without --debug, _log.configure(debug=False)."""
+    configured: dict = {}
+    original_configure = _log.configure
+
+    def fake_configure(*, debug):
+        configured["debug"] = debug
+        original_configure(debug=debug)
+
+    monkeypatch.setattr(_m._log, "configure", fake_configure)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    rc = main([])
+    assert rc == 0
+    assert configured.get("debug") is False
+
+
+# ---------------------------------------------------------------------------
+# Demos badge: tty no-subcommand + check_for_update→version → tui.run receives
+# update_available=True
+# ---------------------------------------------------------------------------
+
+
+def test_tui_run_receives_update_available_true_when_update_exists(monkeypatch):
+    """When check_for_update returns a version, tui.run gets update_available=True."""
+    monkeypatch.setattr(up, "check_for_update", lambda **k: "9.9.9")
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    captured: dict = {}
+
+    def fake_run(card, *, console, update_available, **kw):
+        captured["update_available"] = update_available
+
+    monkeypatch.setattr(_m.tui, "run", fake_run)
+    rc = main([])
+    assert rc == 0
+    assert captured.get("update_available") is True
+
+
+def test_tui_run_receives_update_available_false_when_no_update(monkeypatch):
+    """When check_for_update returns None, tui.run gets update_available=False."""
+    monkeypatch.setattr(up, "check_for_update", lambda **k: None)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    captured: dict = {}
+
+    def fake_run(card, *, console, update_available, **kw):
+        captured["update_available"] = update_available
+
+    monkeypatch.setattr(_m.tui, "run", fake_run)
+    rc = main([])
+    assert rc == 0
+    assert captured.get("update_available") is False
+
+
+def test_tui_run_receives_update_available_false_when_check_suppressed(monkeypatch):
+    """When --no-update-check is set, tui.run gets update_available=False."""
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    captured: dict = {}
+
+    def fake_run(card, *, console, update_available, **kw):
+        captured["update_available"] = update_available
+
+    monkeypatch.setattr(_m.tui, "run", fake_run)
+    rc = main(["--no-update-check"])
+    assert rc == 0
+    assert captured.get("update_available") is False

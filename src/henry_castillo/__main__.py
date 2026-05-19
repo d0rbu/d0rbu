@@ -15,7 +15,7 @@ import webbrowser
 from rich.console import Console
 from rich.text import Text
 
-from henry_castillo import __version__, content, render, tui
+from henry_castillo import __version__, _log, content, failure_ui, render, tui
 from henry_castillo import update as _update
 
 _FALSEY_ENV = {"", "0", "false", "no", "off"}
@@ -25,7 +25,7 @@ _SEC_PROJECTS = "projects"
 _SEC_RESUME = "resume"
 _SEC_RESUME_ACCENT = "résumé"
 _SEC_CONTACT = "contact"
-_SEC_SUBSTACK = "substack"
+_SEC_BLOG = "blog"
 
 
 def _update_check_disabled_by_env() -> bool:
@@ -69,6 +69,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="skip the background update check on this run",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="enable debug logging to stderr",
+    )
     sub = parser.add_subparsers(dest="section")
     sub.add_parser(_SEC_ABOUT, help="show the about section")
     pp = sub.add_parser(_SEC_PROJECTS, help="list projects")
@@ -83,7 +88,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="open the résumé PDF/web link in a browser",
     )
     sub.add_parser(_SEC_CONTACT, help="show contact info")
-    sub.add_parser(_SEC_SUBSTACK, help="show the Substack link")
+    sub.add_parser(_SEC_BLOG, help="show the blog link")
     return parser
 
 
@@ -97,33 +102,32 @@ def _maybe_notice(args: argparse.Namespace) -> None:
         print(_update.update_notice(latest))
 
 
-def _render_section(args: argparse.Namespace, console: Console) -> int:
-    profile = content.load_profile()
+def _render_section(
+    args: argparse.Namespace, console: Console, card: content.Card
+) -> int:
     section = args.section
     if section == _SEC_ABOUT:
-        console.print(render.about(profile))
+        console.print(render.about(card.profile))
     elif section == _SEC_PROJECTS:
-        console.print(
-            render.projects(content.load_projects(), tag=getattr(args, "tag", None))
-        )
+        console.print(render.projects(card.projects, tag=getattr(args, "tag", None)))
     elif section in (_SEC_RESUME, _SEC_RESUME_ACCENT):
-        console.print(render.resume(profile))
+        console.print(render.resume(card))
         if getattr(args, "open_resume", False):
-            pdf = profile.resume.pdf
+            pdf = card.resume.pdf
             if pdf:
                 _open_url(pdf)
             else:
                 console.print(
                     Text(
-                        "No résumé link set (`resume.pdf` in content/profile.json).",
+                        "No résumé link set.",
                         style="dim",
                     )
                 )
     elif section == _SEC_CONTACT:
-        console.print(render.contact(profile))
-    elif section == _SEC_SUBSTACK:
-        console.print(render.substack(profile))
-        url = render.substack_url(profile)
+        console.print(render.contact(card.profile))
+    elif section == _SEC_BLOG:
+        console.print(render.blog(card.profile))
+        url = render.blog_url(card.profile)
         if url is not None:
             _open_url(url)
     return 0
@@ -135,6 +139,8 @@ def main(argv: list[str] | None = None) -> int:
     _harden_stream(sys.stdout)
     argv = [unicodedata.normalize("NFC", a) for a in argv]
     args = _build_parser().parse_args(argv)
+
+    _log.configure(debug=_log.debug_enabled(cli_flag=args.debug))
 
     if args.version:
         print(f"henry-castillo {__version__}")
@@ -153,18 +159,31 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     console = Console()
+    try:
+        card = content.load_card()
+    except content.CardError as exc:
+        _log.logger.error("load_card failed: {}", exc)
+        return failure_ui.show_no_data(
+            str(exc),
+            url="https://d0rbu.github.io/d0rbu/",
+            is_tty=sys.stdout.isatty(),
+            console=console,
+        )
+
     if args.section is not None:
-        rc = _render_section(args, console)
+        rc = _render_section(args, console, card)
         _maybe_notice(args)
         return rc
 
-    profile = content.load_profile()
-    projects = content.load_projects()
     if sys.stdout.isatty():
-        tui.run(profile, projects, console=console)
-        _maybe_notice(args)
+        latest = (
+            _update.check_for_update()
+            if (not args.no_update_check and not _update_check_disabled_by_env())
+            else None
+        )
+        tui.run(card, console=console, update_available=latest is not None)
     else:
-        render.render_all(console, profile, projects)
+        render.render_all(console, card)
         _maybe_notice(args)
     return 0
 

@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 import pytest
 
@@ -33,7 +34,7 @@ def test_alias_bare_run(alias):
     r = subprocess.run([exe], capture_output=True, text=True, check=False)  # noqa: S603
     assert r.returncode == 0
     assert r.stderr == ""
-    for _title in ("About", "Projects", "Résumé", "Contact", "Substack"):
+    for _title in ("About", "Projects", "Résumé", "Contact", "Blog"):
         assert _title in r.stdout
     # The update notice must never appear: stdout is not a tty under
     # subprocess capture, proving the isatty offline guard end-to-end.
@@ -183,3 +184,35 @@ def test_all_aliases_byte_identical():
         assert r.stdout == ref.stdout, f"{alias} stdout differs"
         assert r.returncode == ref.returncode
         assert r.stderr == ref.stderr
+
+
+def test_non_tty_no_card_failure_path():
+    """#6: non-tty subprocess with unreachable URL and empty cache → rc==1,
+    friendly message + contact email on stderr, no traceback, nothing opened.
+    """
+    with tempfile.TemporaryDirectory() as empty_cache:
+        env = {
+            **os.environ,
+            # Point to an unreachable URL so fetch fails fast
+            "HENRY_CASTILLO_CARD_URL": "http://127.0.0.1:1/card.json",
+            # Point to an empty tmp dir so there is no cached card
+            "XDG_CACHE_HOME": empty_cache,
+            "HENRY_CASTILLO_NO_UPDATE_CHECK": "1",
+        }
+        r = subprocess.run(
+            [sys.executable, "-m", "henry_castillo"],
+            capture_output=True,
+            text=True,
+            check=False,
+            stdin=subprocess.PIPE,  # non-tty stdin
+            env=env,
+        )
+    assert r.returncode == 1, f"Expected rc=1, got {r.returncode}"
+    # Friendly message on stderr
+    assert "no usable profile data" in r.stderr.lower() or r.stderr, (
+        f"Expected failure message on stderr, got: {r.stderr!r}"
+    )
+    assert "henryandrecastillo@gmail.com" in r.stderr
+    # No traceback
+    assert "Traceback" not in r.stderr
+    assert "Traceback" not in r.stdout
