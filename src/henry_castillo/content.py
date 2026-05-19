@@ -200,3 +200,189 @@ def load_projects() -> list[Project]:
             )
         )
     return projects
+
+
+# ---------------------------------------------------------------------------
+# Strict remote-card model (additive — existing symbols above are unchanged)
+# ---------------------------------------------------------------------------
+
+
+class CardError(Exception):
+    """Card data missing/malformed; message names the offending path."""
+
+
+@dataclass(frozen=True)
+class CardResume:
+    pdf: str
+    experience: list[dict]  # type: ignore[type-arg]
+    education: list[dict]  # type: ignore[type-arg]
+    highlights: list[str]
+
+
+@dataclass(frozen=True)
+class CardLinks:
+    github: str
+    blog: str
+
+
+@dataclass(frozen=True)
+class CardProfile:
+    name: str
+    handle: str
+    tagline: str
+    about: str
+    email: str
+    links: CardLinks
+
+
+@dataclass(frozen=True)
+class CardProject:
+    name: str
+    blurb: str
+    url: str
+    tags: list[str]
+
+
+@dataclass(frozen=True)
+class Card:
+    schema_version: int
+    profile: CardProfile
+    projects: list[CardProject]
+    resume: CardResume
+
+
+SCHEMA_VERSION = 1
+
+
+def _sanitize_strict(value: str) -> str:
+    return "".join(c for c in value if c in "\n\t" or unicodedata.category(c) != "Cc")
+
+
+def _sanitize_json_strict(obj: object) -> object:
+    if isinstance(obj, str):
+        return _sanitize_strict(obj)
+    if isinstance(obj, dict):
+        return {
+            _sanitize_json_strict(k): _sanitize_json_strict(v) for k, v in obj.items()
+        }
+    if isinstance(obj, list):
+        return [_sanitize_json_strict(v) for v in obj]
+    return obj
+
+
+def _req(d: dict[str, object], parent_path: str, key: str) -> str:
+    v = d.get(key)
+    if not isinstance(v, str) or v == "":
+        raise CardError(f"{parent_path}.{key}: expected a non-empty string")
+    return _sanitize_strict(v)
+
+
+def _opt(d: dict[str, object], key: str, path: str) -> str:
+    v = d.get(key)
+    if key not in d or not isinstance(v, str):
+        raise CardError(f'{path}: expected a string (use "" if none)')
+    return _sanitize_strict(v)
+
+
+_CARD_REQUIRED_KEYS = {"schema_version", "profile", "projects", "resume"}
+
+
+def _parse_profile(p: object) -> CardProfile:
+    if not isinstance(p, dict):
+        raise CardError("profile.name: profile is missing or not an object")
+    pd: dict[str, object] = cast("dict[str, object]", p)
+    name = _req(pd, "profile", "name")
+    handle = _req(pd, "profile", "handle")
+    tagline = _req(pd, "profile", "tagline")
+    about = _req(pd, "profile", "about")
+    email = _req(pd, "profile", "email")
+    lk = pd.get("links")
+    if not isinstance(lk, dict):
+        raise CardError("links.github: profile.links missing or not an object")
+    ld: dict[str, object] = cast("dict[str, object]", lk)
+    links = CardLinks(
+        github=_req(ld, "links", "github"),
+        blog=_opt(ld, "blog", "links.blog"),
+    )
+    return CardProfile(
+        name=name,
+        handle=handle,
+        tagline=tagline,
+        about=about,
+        email=email,
+        links=links,
+    )
+
+
+def _parse_project(it: object, i: int) -> CardProject:
+    if not isinstance(it, dict):
+        raise CardError(f"projects[{i}]: not an object")
+    itd: dict[str, object] = cast("dict[str, object]", it)
+    tags = itd.get("tags")
+    if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
+        raise CardError(f"projects[{i}].tags: expected list[str]")
+    str_tags: list[str] = cast("list[str]", tags)
+    return CardProject(
+        name=_req(itd, f"projects[{i}]", "name"),
+        blurb=_opt(itd, "blurb", f"projects[{i}].blurb"),
+        url=_req(itd, f"projects[{i}]", "url"),
+        tags=[_sanitize_strict(t) for t in str_tags],
+    )
+
+
+def _parse_resume(r: object) -> CardResume:
+    if not isinstance(r, dict):
+        raise CardError("resume: missing or not an object")
+    rd: dict[str, object] = cast("dict[str, object]", r)
+    exp = rd.get("experience")
+    edu = rd.get("education")
+    hi = rd.get("highlights")
+    if not isinstance(exp, list) or not all(isinstance(x, dict) for x in exp):
+        raise CardError("resume.experience: expected list of objects")
+    if not isinstance(edu, list) or not all(isinstance(x, dict) for x in edu):
+        raise CardError("resume.education: expected list of objects")
+    if not isinstance(hi, list) or not all(isinstance(x, str) for x in hi):
+        raise CardError("resume.highlights: expected list of strings")
+    exp_dicts: list[dict[str, object]] = cast("list[dict[str, object]]", exp)
+    edu_dicts: list[dict[str, object]] = cast("list[dict[str, object]]", edu)
+    hi_strs: list[str] = cast("list[str]", hi)
+    return CardResume(
+        pdf=_opt(rd, "pdf", "resume.pdf"),
+        experience=[_sanitize_json_strict_dict(x) for x in exp_dicts],
+        education=[_sanitize_json_strict_dict(x) for x in edu_dicts],
+        highlights=[_sanitize_strict(x) for x in hi_strs],
+    )
+
+
+def parse_card(data: object) -> Card:
+    if not isinstance(data, dict):
+        raise CardError("card: root is not an object")
+    dd: dict[str, object] = cast("dict[str, object]", data)
+    if not _CARD_REQUIRED_KEYS.issubset(dd.keys()):
+        raise CardError(
+            f"card: missing required keys {_CARD_REQUIRED_KEYS - dd.keys()!r}"
+        )
+    sv = dd.get("schema_version")
+    if sv != SCHEMA_VERSION:
+        raise CardError(
+            f"schema_version: expected {SCHEMA_VERSION}, got {sv!r}"
+            " — update henry-castillo"
+        )
+    # sv == SCHEMA_VERSION (int) after the guard above
+    sv_int: int = cast("int", sv)
+    raw_projects = dd.get("projects")
+    if not isinstance(raw_projects, list) or not raw_projects:
+        raise CardError("projects: expected a non-empty list")
+    return Card(
+        schema_version=sv_int,
+        profile=_parse_profile(dd.get("profile")),
+        projects=[_parse_project(it, i) for i, it in enumerate(raw_projects)],
+        resume=_parse_resume(dd.get("resume")),
+    )
+
+
+def _sanitize_json_strict_dict(x: dict[str, object]) -> dict[str, object]:
+    return cast(
+        "dict[str, object]",
+        {_sanitize_json_strict(k): _sanitize_json_strict(v) for k, v in x.items()},
+    )
