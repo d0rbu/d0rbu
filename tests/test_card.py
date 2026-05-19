@@ -135,7 +135,7 @@ def test_parse_non_dict_root(bad):
         content.parse_card(bad)
 
 
-def test_sanitize_strict_residue_note():
+def test_sanitize_residue_note():
     # ESC (Cc) removed; the "[31m" residue text remains (acceptable per design).
     assert (
         content._sanitize("a\x1b[31mX\x1b[0m\x07b\x00\x9bc\nd\te")
@@ -145,7 +145,7 @@ def test_sanitize_strict_residue_note():
 
 
 @pytest.mark.parametrize("cp", list(range(0x00, 0x100)))
-def test_sanitize_strict_exhaustive_latin1(cp):
+def test_sanitize_exhaustive_latin1(cp):
     ch = chr(cp)
     out = content._sanitize(ch)
     if ch in "\n\t":
@@ -200,14 +200,14 @@ def test_profile_missing_links_key():
         content.parse_card(d)
 
 
-def test_sanitize_json_strict_passthrough():
+def test_sanitize_json_passthrough():
     """Non-str/dict/list values pass through unchanged."""
     assert content._sanitize_json(42) == 42
     assert content._sanitize_json(None) is None
     assert content._sanitize_json(3.14) == 3.14
 
 
-def test_sanitize_json_strict_nested():
+def test_sanitize_json_nested():
     """Nested dict/list sanitization recurses correctly."""
     obj = {"k\x00": ["v\x01", {"inner\x07": "data\x1b"}]}
     result = content._sanitize_json(obj)
@@ -242,7 +242,7 @@ def test_parse_rejects_deeply_nested_resume_entry():
     assert "deep" in str(ei.value).lower()
 
 
-def test_sanitize_json_strict_depth_bound_raises_carderror():
+def test_sanitize_json_depth_bound_raises_carderror():
     deep: object = "leaf"
     for _ in range(content._MAX_JSON_DEPTH + 5):
         deep = [deep]
@@ -250,7 +250,7 @@ def test_sanitize_json_strict_depth_bound_raises_carderror():
         content._sanitize_json(deep)
 
 
-def test_sanitize_json_strict_dict_direct():
+def test_sanitize_json_dict_direct():
     out = content._sanitize_json_dict({"k\x00": "v\x1bx", "n": 3})
     assert out == {"k": "vx", "n": 3}
 

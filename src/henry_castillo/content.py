@@ -88,6 +88,10 @@ def _sanitize_json(obj: object, _depth: int = 0) -> object:
     return obj
 
 
+def _sanitize_json_dict(x: dict) -> dict:
+    return cast("dict[str, object]", _sanitize_json(x, 0))
+
+
 def _req(d: dict[str, object], parent_path: str, key: str) -> str:
     v = d.get(key)
     if not isinstance(v, str) or v == "":
@@ -197,10 +201,6 @@ def parse_card(data: object) -> Card:
         projects=[_parse_project(it, i) for i, it in enumerate(raw_projects)],
         resume=_parse_resume(dd.get("resume")),
     )
-
-
-def _sanitize_json_dict(x: dict) -> dict:
-    return cast("dict[str, object]", _sanitize_json(x, 0))
 
 
 # ---------------------------------------------------------------------------
