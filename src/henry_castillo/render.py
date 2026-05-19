@@ -8,14 +8,13 @@ from __future__ import annotations
 
 import unicodedata
 from collections.abc import Callable
-from typing import cast
 
 from rich.console import Console, Group, RenderableType
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from henry_castillo.content import Card, CardProfile, CardProject, Profile, Project
+from henry_castillo.content import Card, CardProfile, CardProject
 
 
 def banner(profile: CardProfile) -> RenderableType:
@@ -131,94 +130,8 @@ SECTIONS: list[tuple[str, Callable[[Card], RenderableType]]] = [
 ]
 
 
-def render_all(  # type: ignore[misc]
-    console: Console,
-    card_or_profile: Card | Profile,
-    legacy_projects: list[Project] | None = None,
-) -> None:
-    """Render all sections to *console*.
-
-    Primary call signature: ``render_all(console, card)`` — card is a
-    strict :class:`Card` and drives all sections.
-
-    Legacy call signature: ``render_all(console, profile, project_list)`` —
-    accepted for backward compat with ``test_property.py`` which calls the
-    old ``(console, Profile, list[Project])`` form.
-    """
-    if isinstance(card_or_profile, Card):
-        card = card_or_profile
-        console.print(banner(card.profile))
-        for _name, fn in SECTIONS:
-            console.print(fn(card))
-    else:
-        # Legacy compat path for test_property.py: Profile + list[Project]
-        _profile = card_or_profile
-        _projs: list[Project] = legacy_projects if legacy_projects is not None else []
-        # Use Text-only rendering to avoid calling strict-typed helpers.
-        console.print(
-            Panel(Text(_profile.name or ""), expand=False, border_style="cyan")
-        )
-        console.print(
-            Panel(Text(_profile.about or ""), title="About", border_style="cyan")
-        )
-        console.print(projects(cast("list[CardProject]", _projs)))
-        # Resume (from old Profile.resume)
-        r = _profile.resume
-        r_parts: list[RenderableType] = []
-        for h in r.highlights:
-            r_parts.append(Text(f"  • {h}"))
-        for e in r.experience:
-            head = " — ".join(
-                x
-                for x in (
-                    str(e.get("role", "")),
-                    str(e.get("org", "")),
-                    str(e.get("period", "")),
-                )
-                if x
-            )
-            r_parts.append(Text(f"  {head}"))
-            if e.get("summary"):
-                r_parts.append(Text(f"    {e['summary']}", style="dim"))
-        for ed in r.education:
-            r_parts.append(
-                Text(
-                    "  "
-                    + " — ".join(
-                        x
-                        for x in (
-                            str(ed.get("degree", "")),
-                            str(ed.get("school", "")),
-                            str(ed.get("period", "")),
-                        )
-                        if x
-                    )
-                )
-            )
-        if r.pdf:
-            r_parts.append(Text(f"\nPDF: {r.pdf}", style="dim"))
-        console.print(Panel(Group(*r_parts), title="Résumé", border_style="cyan"))
-        # Contact
-        c_lines: list[str] = []
-        if _profile.email:
-            c_lines.append(f"Email:  {_profile.email}")
-        for lbl, url in _profile.links.items():
-            if lbl == "substack":
-                continue
-            c_lines.append(f"{lbl.capitalize()}:  {url}")
-        console.print(
-            Panel(Text("\n".join(c_lines)), title="Contact", border_style="cyan")
-        )
-
-
-# ---------------------------------------------------------------------------
-# Backward-compatibility shims for test_property.py (NOT part of the new API)
-# ---------------------------------------------------------------------------
-
-
-def substack_url(profile: Profile) -> str | None:
-    """Compat shim: test_property.py calls this with the old Profile type."""
-    url = profile.links.get("substack", "")
-    if not url.strip() or "TODO" in url.upper():
-        return None
-    return url
+def render_all(console: Console, card: Card) -> None:
+    """Render all sections to *console*."""
+    console.print(banner(card.profile))
+    for _name, fn in SECTIONS:
+        console.print(fn(card))

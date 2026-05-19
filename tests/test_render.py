@@ -11,9 +11,6 @@ from henry_castillo.content import (
     CardLinks,
     CardProfile,
     CardProject,
-    Profile,
-    Project,
-    Resume,
     parse_card,
 )
 
@@ -426,46 +423,3 @@ def test_project_blurb_with_brackets_renders_literally():
     proj = [CardProject("p", "blurb [b]z[/b]", "https://u/[v]", ["t1", "t2"])]
     out = _text(render.projects(proj))
     assert "blurb [b]z[/b]" in out and "[t1, t2]" in out and "https://u/[v]" in out
-
-
-# ---------------------------------------------------------------------------
-# Legacy compat: render_all with (console, Profile, list[Project]) signature
-# (backward compat for test_property.py — covers the legacy compat path branches)
-# ---------------------------------------------------------------------------
-
-
-def test_render_all_legacy_profile_with_summary_and_substack():
-    """Cover legacy render_all path: experience with summary + substack link skip."""
-    legacy_profile = Profile(
-        name="Old Henry",
-        handle="oldh",
-        tagline="ML",
-        about="Old bio.",
-        email="old@x.y",
-        links={"github": "https://g.io", "substack": "https://s.com"},
-        resume=Resume(
-            pdf="",
-            experience=[
-                {
-                    "org": "Corp",
-                    "role": "Dev",
-                    "period": "2023",
-                    "summary": "Built stuff",
-                }
-            ],
-            education=[{"degree": "BS", "school": "MIT", "period": "2020"}],
-            highlights=["h1"],
-        ),
-    )
-    legacy_projects = [Project("lp1", "b", "u", [])]
-    buf = io.StringIO()
-    render.render_all(
-        Console(file=buf, width=80, no_color=True), legacy_profile, legacy_projects
-    )
-    out = buf.getvalue()
-    assert "Old bio." in out
-    assert "Corp" in out
-    assert "Built stuff" in out  # covers the summary branch (line 177)
-    assert "MIT" in out
-    assert "old@x.y" in out
-    assert "substack" not in out.lower()  # covers the substack skip (line 202)
