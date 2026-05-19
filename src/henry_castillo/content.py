@@ -252,21 +252,25 @@ class Card:
 
 
 SCHEMA_VERSION = 1
+_MAX_JSON_DEPTH = 64
 
 
 def _sanitize_strict(value: str) -> str:
     return "".join(c for c in value if c in "\n\t" or unicodedata.category(c) != "Cc")
 
 
-def _sanitize_json_strict(obj: object) -> object:
+def _sanitize_json_strict(obj: object, _depth: int = 0) -> object:
+    if _depth > _MAX_JSON_DEPTH:
+        raise CardError("resume: nested data too deeply nested")
     if isinstance(obj, str):
         return _sanitize_strict(obj)
     if isinstance(obj, dict):
         return {
-            _sanitize_json_strict(k): _sanitize_json_strict(v) for k, v in obj.items()
+            _sanitize_json_strict(k, _depth + 1): _sanitize_json_strict(v, _depth + 1)
+            for k, v in obj.items()
         }
     if isinstance(obj, list):
-        return [_sanitize_json_strict(v) for v in obj]
+        return [_sanitize_json_strict(v, _depth + 1) for v in obj]
     return obj
 
 
@@ -279,7 +283,7 @@ def _req(d: dict[str, object], parent_path: str, key: str) -> str:
 
 def _opt(d: dict[str, object], key: str, path: str) -> str:
     v = d.get(key)
-    if key not in d or not isinstance(v, str):
+    if not isinstance(v, str):
         raise CardError(f'{path}: expected a string (use "" if none)')
     return _sanitize_strict(v)
 
@@ -363,7 +367,7 @@ def parse_card(data: object) -> Card:
             f"card: missing required keys {_CARD_REQUIRED_KEYS - dd.keys()!r}"
         )
     sv = dd.get("schema_version")
-    if sv != SCHEMA_VERSION:
+    if not isinstance(sv, int) or isinstance(sv, bool) or sv != SCHEMA_VERSION:
         raise CardError(
             f"schema_version: expected {SCHEMA_VERSION}, got {sv!r}"
             " — update henry-castillo"
@@ -381,8 +385,5 @@ def parse_card(data: object) -> Card:
     )
 
 
-def _sanitize_json_strict_dict(x: dict[str, object]) -> dict[str, object]:
-    return cast(
-        "dict[str, object]",
-        {_sanitize_json_strict(k): _sanitize_json_strict(v) for k, v in x.items()},
-    )
+def _sanitize_json_strict_dict(x: dict) -> dict:
+    return cast("dict[str, object]", _sanitize_json_strict(x, 0))

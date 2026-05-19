@@ -76,6 +76,8 @@ def test_parse_valid():
         (lambda d: d.__setitem__("schema_version", 2), "schema_version"),
         (lambda d: d.pop("schema_version"), "schema_version"),
         (lambda d: d.__setitem__("schema_version", "1"), "schema_version"),
+        (lambda d: d.__setitem__("schema_version", True), "schema_version"),
+        (lambda d: d.__setitem__("schema_version", 1.0), "schema_version"),
         (lambda d: d.__setitem__("profile", {}), "profile.name"),
         (lambda d: d["profile"].__setitem__("name", ""), "profile.name"),
         (lambda d: d["profile"].__setitem__("name", 5), "profile.name"),
@@ -212,3 +214,36 @@ def test_resume_non_dict_value():
     d["resume"] = "not-a-dict"
     with pytest.raises(CardError, match="resume"):
         content.parse_card(d)
+
+
+def test_parse_rejects_deeply_nested_resume_entry():
+    d = copy.deepcopy(_VALID)
+    inner: object = {"leaf": "v"}
+    for _ in range(200):  # > _MAX_JSON_DEPTH (64), << python recursion limit
+        inner = {"x": inner}
+    resume = cast("dict[str, object]", d["resume"])
+    resume["experience"] = [inner]
+    with pytest.raises(content.CardError) as ei:
+        content.parse_card(d)
+    assert "deep" in str(ei.value).lower()
+
+
+def test_sanitize_json_strict_depth_bound_raises_carderror():
+    deep: object = "leaf"
+    for _ in range(content._MAX_JSON_DEPTH + 5):
+        deep = [deep]
+    with pytest.raises(content.CardError):
+        content._sanitize_json_strict(deep)
+
+
+def test_sanitize_json_strict_dict_direct():
+    out = content._sanitize_json_strict_dict({"k\x00": "v\x1bx", "n": 3})
+    assert out == {"k": "vx", "n": 3}
+
+
+def test_shallow_nested_experience_valid():
+    """A legitimately nested (but shallow) experience entry parses fine."""
+    d = copy.deepcopy(_VALID)
+    cast("dict[str, object]", d["resume"])["experience"] = [{"role": {"a": {"b": "c"}}}]
+    c = content.parse_card(d)
+    assert c.resume.experience == [{"role": {"a": {"b": "c"}}}]
