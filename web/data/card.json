@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "profile": {
+    "name": "Henry Castillo",
+    "handle": "d0rbu",
+    "tagline": "Interpretability and safety researcher",
+    "about": "DRAFT — Henry Castillo is an interpretability and safety researcher. (Replace this with your real bio.)",
+    "email": "henryandrecastillo@gmail.com",
+    "links": {
+      "github": "https://github.com/d0rbu",
+      "blog": ""
+    }
+  },
+  "projects": [
+    {
+      "name": "mc-dreamer",
+      "blurb": "DRAFT — Minecraft world-model / dreamer-style agent. (Replace blurb.)",
+      "url": "https://github.com/d0rbu/mc-dreamer",
+      "tags": ["ml"]
+    },
+    {
+      "name": "nano-gpt-pretrain-steer",
+      "blurb": "DRAFT — Conditional pretraining / activation steering on nanoGPT. (Replace blurb.)",
+      "url": "https://github.com/Algorithmic-Alignment-Lab/nano-gpt-pretrain-steer",
+      "tags": ["interpretability", "pretraining"]
+    }
+  ],
+  "resume": {
+    "pdf": "",
+    "experience": [
+      {
+        "org": "DRAFT — add real entries",
+        "role": "",
+        "period": "",
+        "summary": ""
+      }
+    ],
+    "education": [
+      {
+        "school": "DRAFT — add real entries",
+        "degree": "",
+        "period": ""
+      }
+    ],
+    "highlights": [
+      "DRAFT — add résumé highlights"
+    ]
+  }
+}
