@@ -90,6 +90,18 @@ def _has_control(s: str) -> bool:
     return any(c not in "\n\t" and unicodedata.category(c) == "Cc" for c in s)
 
 
+def _all_strings(obj):
+    if isinstance(obj, str):
+        yield obj
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            yield from _all_strings(k)
+            yield from _all_strings(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _all_strings(v)
+
+
 # NOTE: positional @given with pytest fixtures does not work (fixture 'value'
 # not found); use keyword argument form so Hypothesis can distinguish its
 # generated args from pytest fixtures. The contract being tested is identical.
@@ -119,7 +131,8 @@ def test_loaded_profile_has_no_control_chars(doc, tmp_path, monkeypatch):
         assert not _has_control(k) and not _has_control(v)
     for h in p.resume.highlights:
         assert not _has_control(h)
-    assert not _has_control(repr(p.resume.experience + p.resume.education))
+    for s in _all_strings(p.resume.experience + p.resume.education):
+        assert not _has_control(s)
 
 
 @given(pdoc=_profile_doc, jdoc=_projects_doc)
