@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { PACKAGE, banner, isMain } from "../src/index.js";
+import { banner, isMain, PACKAGE } from "../src/index.js";
 
 const SUFFIX = "— scaffold (npm wrapper wired in Milestone 4)";
 const THIS_FILE = resolve(import.meta.dirname, "index.test.ts");

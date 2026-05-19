@@ -12,7 +12,9 @@
     "henry": "dist/index.js",
     "secret-string-lol": "dist/index.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "engines": {
     "node": ">=20"
   },
@@ -27,7 +29,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
-    "@biomejs/biome": "1.9.4",
+    "@biomejs/biome": "2.4.15",
     "@types/node": "^25.8.0",
     "@vitest/coverage-v8": "2.1.9",
     "tsup": "8.3.5",
