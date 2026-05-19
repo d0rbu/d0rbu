@@ -17,7 +17,7 @@ from rich.console import Console
 
 import henry_castillo.__main__ as _m
 import henry_castillo.update as up
-from henry_castillo import __version__
+from henry_castillo import __version__, render
 from henry_castillo.__main__ import (
     _harden_stream,
     _maybe_notice,
@@ -191,22 +191,22 @@ def test_help_exits_zero(argv):
         (" off ", False),
     ],
 )
-def test_env_contract_drives_check_for_update(value, suppressed, monkeypatch):
+def test_env_contract_drives_check_for_update(
+    value, suppressed, monkeypatch, stub_tui_run
+):
     called = []
     monkeypatch.setenv("HENRY_CASTILLO_NO_UPDATE_CHECK", value)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
-    monkeypatch.setattr(_m.tui, "run", lambda *_a, **_k: None)
     monkeypatch.setattr(up, "check_for_update", lambda **k: called.append(1) or None)
     rc = main([])
     assert rc == 0
     assert (len(called) == 0) is suppressed
 
 
-def test_env_contract_unset_not_suppressed(monkeypatch):
+def test_env_contract_unset_not_suppressed(monkeypatch, stub_tui_run):
     called = []
     monkeypatch.delenv("HENRY_CASTILLO_NO_UPDATE_CHECK", raising=False)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
-    monkeypatch.setattr(_m.tui, "run", lambda *_a, **_k: None)
     monkeypatch.setattr(up, "check_for_update", lambda **k: called.append(1) or None)
     assert main([]) == 0
     assert called == [1]
@@ -240,33 +240,36 @@ def test_update_check_disabled_by_env_unit(value, expected, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_maybe_notice_positive_path_exact_real_notice(monkeypatch, capsys):
+def test_maybe_notice_positive_path_exact_real_notice(
+    monkeypatch, capsys, stub_tui_run
+):
     """Positive path asserts the EXACT real notice (update_notice NOT mocked)."""
     monkeypatch.setattr(up, "check_for_update", lambda **k: "9.9.9")
     monkeypatch.setattr(up, "current_version", lambda: __version__)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
-    monkeypatch.setattr(_m.tui, "run", lambda *_a, **_k: None)
     rc = main([])
     out = capsys.readouterr().out
     assert rc == 0
     assert out == _EXPECTED_NOTICE
 
 
-def test_maybe_notice_no_update_available_prints_nothing_extra(monkeypatch, capsys):
+def test_maybe_notice_no_update_available_prints_nothing_extra(
+    monkeypatch, capsys, stub_tui_run
+):
     monkeypatch.setattr(up, "check_for_update", lambda **k: None)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
-    monkeypatch.setattr(_m.tui, "run", lambda *_a, **_k: None)
     rc = main([])
     out = capsys.readouterr().out
     assert rc == 0
     assert "A new release" not in out
 
 
-def test_maybe_notice_suppressed_with_no_update_check_flag(monkeypatch, capsys):
+def test_maybe_notice_suppressed_with_no_update_check_flag(
+    monkeypatch, capsys, stub_tui_run
+):
     called = []
     monkeypatch.setattr(up, "check_for_update", lambda **k: called.append(1) or "9.9.9")
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
-    monkeypatch.setattr(_m.tui, "run", lambda *_a, **_k: None)
     rc = main(["--no-update-check"])
     out = capsys.readouterr().out
     assert rc == 0
@@ -274,11 +277,10 @@ def test_maybe_notice_suppressed_with_no_update_check_flag(monkeypatch, capsys):
     assert "A new release" not in out
 
 
-def test_maybe_notice_suppressed_by_env_var(monkeypatch, capsys):
+def test_maybe_notice_suppressed_by_env_var(monkeypatch, capsys, stub_tui_run):
     called = []
     monkeypatch.setattr(up, "check_for_update", lambda **k: called.append(1) or "9.9.9")
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
-    monkeypatch.setattr(_m.tui, "run", lambda *_a, **_k: None)
     monkeypatch.setenv("HENRY_CASTILLO_NO_UPDATE_CHECK", "1")
     rc = main([])
     out = capsys.readouterr().out
@@ -299,7 +301,7 @@ def test_maybe_notice_suppressed_when_not_tty_and_no_network(monkeypatch, capsys
 
 
 def test_maybe_notice_offline_under_tty_does_not_crash_and_prints_no_notice(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, stub_tui_run
 ):
     """End-to-end graceful-offline (pairs with the FIX-1 non-dict guard).
 
@@ -312,7 +314,6 @@ def test_maybe_notice_offline_under_tty_does_not_crash_and_prints_no_notice(
     """
     monkeypatch.delenv("HENRY_CASTILLO_NO_UPDATE_CHECK", raising=False)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
-    monkeypatch.setattr(_m.tui, "run", lambda *_a, **_k: None)
     monkeypatch.setattr(up, "cache_path", lambda: tmp_path / "u.json")
 
     def boom(*a, **k):
@@ -326,7 +327,7 @@ def test_maybe_notice_offline_under_tty_does_not_crash_and_prints_no_notice(
 
 
 def test_maybe_notice_under_tty_non_dict_body_prints_no_notice(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, stub_tui_run
 ):
     """Same offline guarantee, end-to-end through the FIX-1 guard.
 
@@ -339,7 +340,6 @@ def test_maybe_notice_under_tty_non_dict_body_prints_no_notice(
     """
     monkeypatch.delenv("HENRY_CASTILLO_NO_UPDATE_CHECK", raising=False)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
-    monkeypatch.setattr(_m.tui, "run", lambda *_a, **_k: None)
     monkeypatch.setattr(up, "cache_path", lambda: tmp_path / "u.json")
 
     class _Resp:
@@ -363,7 +363,7 @@ def test_maybe_notice_under_tty_non_dict_body_prints_no_notice(
 
 
 def test_main_under_tty_info_null_body_rc0_no_notice_no_traceback(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, stub_tui_run
 ):
     """End-to-end FIX 1 through the CLI: a ``{"info": null}`` PyPI body under
     an interactive TTY with the update check enabled must return rc 0, print
@@ -376,7 +376,6 @@ def test_main_under_tty_info_null_body_rc0_no_notice_no_traceback(
     """
     monkeypatch.delenv("HENRY_CASTILLO_NO_UPDATE_CHECK", raising=False)
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
-    monkeypatch.setattr(_m.tui, "run", lambda *_a, **_k: None)
     monkeypatch.setattr(up, "cache_path", lambda: tmp_path / "u.json")
 
     class _Resp:
@@ -661,3 +660,27 @@ def test_resume_accent_alias_accepts_nfd_argv(monkeypatch):
     assert nfd != "résumé"  # decomposed form differs
     rc, out = _run([nfd], monkeypatch)
     assert rc == 0 and "Résumé" in out
+
+
+# ---------------------------------------------------------------------------
+# section-name coherence
+# ---------------------------------------------------------------------------
+
+
+def test_section_names_single_source_of_truth():
+    """render.SECTIONS (display titles) and __main__._SEC_* (subcommand
+    names) must describe the same five logical sections; the only mapping
+    is Résumé<->resume (plus the résumé accent alias)."""
+    display = {name for name, _ in render.SECTIONS}
+    assert display == {"About", "Projects", "Résumé", "Contact", "Substack"}
+    canonical = {
+        _m._SEC_ABOUT,
+        _m._SEC_PROJECTS,
+        _m._SEC_RESUME,
+        _m._SEC_CONTACT,
+        _m._SEC_SUBSTACK,
+    }
+    assert canonical == {"about", "projects", "resume", "contact", "substack"}
+    mapped = {("resume" if d == "Résumé" else d).lower() for d in display}
+    assert mapped == canonical
+    assert _m._SEC_RESUME_ACCENT == "résumé"
