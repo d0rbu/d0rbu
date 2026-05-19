@@ -47,7 +47,6 @@ web/data/     card.json — single source of truth (deployed to GitHub Pages)
 src/          henry_castillo Python package (the CLI)
 web/          static site (Milestone 3)
 packages/npm/ thin npm wrapper (Milestone 4)
-docs/         design spec and implementation plans
 ```
 
 ## Roadmap
@@ -58,8 +57,6 @@ docs/         design spec and implementation plans
 3. **Website** — static site, deployed to GitHub Pages.
 4. **npm distribution** — thin wrapper shipping a frozen binary.
 5. **Demos** *(later)* — opt-in torch/transformers experiments (`henry-castillo[lab]`).
-
-Design details: [`docs/superpowers/specs/2026-05-17-d0rbu-design.md`](docs/superpowers/specs/2026-05-17-d0rbu-design.md).
 
 ## License
 
