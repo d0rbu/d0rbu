@@ -1,11 +1,15 @@
 import copy
 import dataclasses
+import errno
 import functools
+import http.client
 import http.server
 import json as _json
+import os as _os_mod
 import pathlib
 import socket as _socket_mod
 import socketserver
+import tempfile as _tempfile_mod
 import threading
 import unicodedata
 import urllib.request as _urllib_request
@@ -22,6 +26,8 @@ from henry_castillo.content import (
     CardProject,
     CardResume,
 )
+
+_C = content  # short alias used in R2-fix tests below
 
 _VALID: dict[str, object] = {
     "schema_version": 1,
@@ -415,3 +421,146 @@ def test_default_fetch_body_cap(tmp_path, real_network):
         finally:
             srv.shutdown()
             t.join()
+
+
+# ---------------------------------------------------------------------------
+# R2-fix tests: HTTPException handling, non-bytes fetch, _write_cache leak-proof
+# ---------------------------------------------------------------------------
+
+
+def test_load_card_httpexception_treated_as_failure(tmp_path, monkeypatch):
+    cp = tmp_path / "c.json"
+    cp.write_bytes(_doc_bytes())
+    monkeypatch.setattr(_C, "_cache_path", lambda: cp)
+
+    def incomplete(_u):
+        raise http.client.IncompleteRead(b"partial")
+
+    assert isinstance(_C.load_card(fetch=incomplete), _C.Card)  # falls back to cache
+
+
+def test_load_card_httpexception_no_cache_raises_carderror(tmp_path, monkeypatch):
+    monkeypatch.setattr(_C, "_cache_path", lambda: tmp_path / "nope.json")
+
+    def bad(_u):
+        raise http.client.BadStatusLine("nope")
+
+    with pytest.raises(_C.CardError):
+        _C.load_card(fetch=bad)
+
+
+def test_load_card_non_bytes_fetch_no_cache_raises_carderror(tmp_path, monkeypatch):
+    monkeypatch.setattr(_C, "_cache_path", lambda: tmp_path / "nope.json")
+    with pytest.raises(_C.CardError):
+        _C.load_card(fetch=lambda _u: None)  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+
+
+def test_load_card_non_bytes_fetch_uses_valid_cache(tmp_path, monkeypatch):
+    cp = tmp_path / "c.json"
+    cp.write_bytes(_doc_bytes())
+    monkeypatch.setattr(_C, "_cache_path", lambda: cp)
+    assert isinstance(_C.load_card(fetch=lambda _u: None), _C.Card)  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+    assert cp.read_bytes() == _doc_bytes()  # non-bytes fetch did not clobber cache
+
+
+def test_parse_bytes_rejects_non_bytes():
+    with pytest.raises(_C.CardError):
+        _C._parse_bytes(None)  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+    with pytest.raises(_C.CardError):
+        _C._parse_bytes("not bytes")  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+
+
+def test_write_cache_no_temp_leak_on_replace_failure(tmp_path, monkeypatch):
+    cp = tmp_path / "cd" / "card.json"
+    monkeypatch.setattr(_C, "_cache_path", lambda: cp)
+    real_replace = pathlib.Path.replace
+
+    def boom(self, target):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(pathlib.Path, "replace", boom)
+    _C._write_cache(b"data")  # must not raise
+    monkeypatch.setattr(pathlib.Path, "replace", real_replace)
+    leftovers = list((tmp_path / "cd").glob("tmp*"))
+    assert leftovers == [], f"temp file leaked: {leftovers}"
+    assert not cp.exists()  # replace failed -> no cache file
+
+
+def test_write_cache_no_leak_on_fdopen_failure(tmp_path, monkeypatch):
+    """Exercises the fd != -1 finally branch: mkstemp succeeds, fdopen raises before
+    taking ownership of the fd, so the finally must close and unlink without leaking."""
+    cp = tmp_path / "cd2" / "card.json"
+    monkeypatch.setattr(_C, "_cache_path", lambda: cp)
+
+    opened_fds: list[int] = []
+    real_mkstemp = _tempfile_mod.mkstemp
+
+    def capture_mkstemp(*a, **k):
+        fd, path = real_mkstemp(*a, **k)
+        opened_fds.append(fd)
+        return fd, path
+
+    monkeypatch.setattr(_tempfile_mod, "mkstemp", capture_mkstemp)
+
+    def boom(fd, *a, **k):
+        # Do NOT close fd here — let the finally branch handle it
+        raise OSError("fdopen failed")
+
+    monkeypatch.setattr(_os_mod, "fdopen", boom)
+    _C._write_cache(b"data")  # must not raise
+
+    # Restore real fdopen before assertions (monkeypatch teardown handles this too)
+    monkeypatch.setattr(_os_mod, "fdopen", _os_mod.fdopen)
+
+    # No tmp* residue in the parent dir
+    parent = tmp_path / "cd2"
+    assert list(parent.glob("tmp*")) == []
+
+    # The fd must have been closed by the finally branch (trying to close again raises)
+    for fd in opened_fds:
+        try:
+            _os_mod.close(fd)
+            raise AssertionError(f"fd {fd} was not closed by finally")
+        except OSError as e:
+            assert e.errno == errno.EBADF, f"unexpected errno {e.errno}"
+
+
+def test_write_cache_finally_close_oserror_suppressed(tmp_path, monkeypatch):
+    """Exercises the contextlib.suppress(OSError) inside finally's os.close(fd) branch.
+
+    We let mkstemp succeed, then make fdopen raise (so fd != -1 in finally),
+    and also make os.close raise OSError — the function must still not raise.
+    """
+    cp = tmp_path / "cd3" / "card.json"
+    monkeypatch.setattr(_C, "_cache_path", lambda: cp)
+
+    def boom_fdopen(fd, *a, **k):
+        raise OSError("fdopen failed")
+
+    def boom_close(fd):
+        raise OSError("close failed")
+
+    monkeypatch.setattr(_os_mod, "fdopen", boom_fdopen)
+    monkeypatch.setattr(_os_mod, "close", boom_close)
+    _C._write_cache(b"data")  # must not raise despite double OSError in finally
+
+
+def test_write_cache_finally_unlink_oserror_suppressed(tmp_path, monkeypatch):
+    """Exercises the contextlib.suppress(OSError) inside finally's Path.unlink() branch.
+
+    We simulate: mkstemp ok, fdopen ok (fd = -1 after context manager), write ok,
+    but Path.replace raises → tmp is not None in finally → unlink raises OSError.
+    The function must still not raise.
+    """
+    cp = tmp_path / "cd4" / "card.json"
+    monkeypatch.setattr(_C, "_cache_path", lambda: cp)
+
+    def boom_replace(self, target):
+        raise OSError("replace failed")
+
+    def boom_unlink(self):
+        raise OSError("unlink failed")
+
+    monkeypatch.setattr(pathlib.Path, "replace", boom_replace)
+    monkeypatch.setattr(pathlib.Path, "unlink", boom_unlink)
+    _C._write_cache(b"data")  # must not raise

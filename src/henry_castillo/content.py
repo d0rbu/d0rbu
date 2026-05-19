@@ -8,6 +8,8 @@ returns empty defaults so the CLI degrades gracefully offline.
 
 from __future__ import annotations
 
+import contextlib
+import http.client
 import json
 import os
 import re
@@ -414,6 +416,9 @@ def _cache_path() -> Path:
     return Path(base) / "henry-castillo" / "card.json"
 
 
+# Scheme is restricted to http(s); urllib's redirect handler refuses non-http(s)
+# redirects. The canonical URL is the author's HTTPS GitHub Pages constant; the env
+# override is a deliberate user choice — so SSRF surface is acceptable-by-design.
 def _default_fetch(url: str) -> bytes:
     if not url.lower().startswith(("http://", "https://")):
         raise OSError(f"refusing non-HTTP(S) URL: {url!r}")
@@ -424,17 +429,30 @@ def _default_fetch(url: str) -> bytes:
 
 def _write_cache(raw: bytes) -> None:
     path = _cache_path()
+    fd = -1
+    tmp: str | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=str(path.parent))
         with os.fdopen(fd, "wb") as fh:
+            fd = -1  # fdopen now owns the fd
             fh.write(raw)
         Path(tmp).replace(path)
+        tmp = None  # promoted; do not unlink
     except (OSError, ValueError):
         return  # cache is best-effort; never fatal
+    finally:
+        if fd != -1:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                Path(tmp).unlink()
 
 
 def _parse_bytes(raw: bytes) -> Card:
+    if not isinstance(raw, bytes):
+        raise CardError("fetched body is not bytes")
     return parse_card(json.loads(raw.decode("utf-8")))
 
 
@@ -444,14 +462,20 @@ def load_card(*, fetch: Callable[[str], bytes] | None = None) -> Card:
     try:
         fetched = do_fetch(_card_url())
         card = _parse_bytes(fetched)
-    except (OSError, ValueError, CardError, RecursionError):
+    except (OSError, ValueError, CardError, RecursionError, http.client.HTTPException):
         card = None
     if card is not None and fetched is not None:
         _write_cache(fetched)
         return card
     try:
         return _parse_bytes(_cache_path().read_bytes())
-    except (OSError, ValueError, CardError, RecursionError) as exc:
+    except (
+        OSError,
+        ValueError,
+        CardError,
+        RecursionError,
+        http.client.HTTPException,
+    ) as exc:
         raise CardError(
             "no usable profile data: fetch failed and no valid cache"
         ) from exc
