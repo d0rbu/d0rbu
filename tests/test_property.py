@@ -26,6 +26,54 @@ _json = st.recursive(
     max_leaves=25,
 )
 
+# A bounded JSON-ish value used for nested resume entry fields.
+_nested = st.recursive(
+    st.none() | st.booleans() | st.integers() | st.text(),
+    lambda c: (
+        st.lists(c, max_size=3) | st.dictionaries(st.text(max_size=6), c, max_size=3)
+    ),
+    max_leaves=8,
+)
+
+# A profile dict that ACTUALLY uses the schema keys, so string values
+# (which st.text() populates with control chars) flow through _sanitize.
+_profile_doc = st.fixed_dictionaries(
+    {
+        "name": st.text(),
+        "handle": st.text(),
+        "tagline": st.text(),
+        "about": st.text(),
+        "contact": st.fixed_dictionaries({"email": st.text()}),
+        "links": st.dictionaries(st.text(max_size=12), st.text(), max_size=5),
+        "resume": st.fixed_dictionaries(
+            {
+                "pdf": st.text(),
+                "highlights": st.lists(st.text(), max_size=4),
+                "experience": st.lists(
+                    st.dictionaries(st.text(max_size=8), _nested, max_size=4),
+                    max_size=3,
+                ),
+                "education": st.lists(
+                    st.dictionaries(st.text(max_size=8), _nested, max_size=4),
+                    max_size=3,
+                ),
+            }
+        ),
+    }
+)
+
+_projects_doc = st.lists(
+    st.fixed_dictionaries(
+        {
+            "name": st.text(),
+            "blurb": st.text(),
+            "url": st.text(),
+            "tags": st.lists(st.text(), max_size=4),
+        }
+    ),
+    max_size=4,
+)
+
 
 def _install(monkeypatch, tmp_path, name, value):
     cdir = tmp_path / "_content"
@@ -61,9 +109,9 @@ def test_load_projects_never_raises_and_is_typed(value, tmp_path, monkeypatch):
     assert all(isinstance(x, content.Project) for x in out)
 
 
-@given(value=_json)
-def test_loaded_profile_has_no_control_chars(value, tmp_path, monkeypatch):
-    _install(monkeypatch, tmp_path, "profile.json", value)
+@given(doc=_profile_doc)
+def test_loaded_profile_has_no_control_chars(doc, tmp_path, monkeypatch):
+    _install(monkeypatch, tmp_path, "profile.json", doc)
     p = content.load_profile()
     for s in (p.name, p.handle, p.tagline, p.about, p.email, p.resume.pdf):
         assert not _has_control(s)
@@ -74,10 +122,10 @@ def test_loaded_profile_has_no_control_chars(value, tmp_path, monkeypatch):
     assert not _has_control(repr(p.resume.experience + p.resume.education))
 
 
-@given(value=_json)
-def test_render_never_raises_and_no_ansi(value, tmp_path, monkeypatch):
-    _install(monkeypatch, tmp_path, "profile.json", value)
-    _install(monkeypatch, tmp_path, "projects.json", value)
+@given(pdoc=_profile_doc, jdoc=_projects_doc)
+def test_render_never_raises_and_no_ansi(pdoc, jdoc, tmp_path, monkeypatch):
+    _install(monkeypatch, tmp_path, "profile.json", pdoc)
+    _install(monkeypatch, tmp_path, "projects.json", jdoc)
     profile = content.load_profile()
     projects = content.load_projects()
     buf = io.StringIO()
@@ -86,8 +134,16 @@ def test_render_never_raises_and_no_ansi(value, tmp_path, monkeypatch):
     assert "\x1b" not in out and "\x9b" not in out and "\x07" not in out
 
 
-@given(st.dictionaries(st.text(max_size=8), st.text(max_size=40), max_size=5))
-def test_substack_url_invariant(links):
+_todo_like = st.sampled_from(["TODO", "todo", "Todo", "TodoApp", "My TODO substack"])
+_substack_val = st.one_of(st.text(max_size=60), _todo_like)
+
+
+@given(
+    substack_val=_substack_val,
+    extra=st.dictionaries(st.text(max_size=12), st.text(max_size=60), max_size=4),
+)
+def test_substack_url_invariant(substack_val, extra):
+    links = {**extra, "substack": substack_val}
     result = render.substack_url(Profile(links=links))
     if result is not None:
         assert isinstance(result, str)
