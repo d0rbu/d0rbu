@@ -1,4 +1,7 @@
 import importlib
+import os
+import subprocess
+import sys
 
 from henry_castillo import _log
 
@@ -52,3 +55,74 @@ def test_module_import_is_silent(capsys):
     out = capsys.readouterr()
     assert "import-noise-xyz" not in out.err and "import-noise-xyz" not in out.out
     _log.configure(debug=False)  # leave global state clean
+
+
+# ---------------------------------------------------------------------------
+# Subprocess-based tests: observe REAL (fd-level) stderr so loguru's default
+# sink cannot sneak past capsys's Python-object-level patch.
+# ---------------------------------------------------------------------------
+
+
+def _run_child(
+    code: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    run_env = {**os.environ}
+    if env:
+        run_env.update(env)
+    return subprocess.run(  # noqa: S603
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env=run_env,
+        check=False,
+        timeout=30,
+    )
+
+
+def test_import_is_truly_silent_subprocess():
+    """Importing _log and logging without configure() must emit NOTHING on
+    real (fd-level) stderr — kills the 'delete logger.remove()' mutation
+    that capsys cannot catch (loguru's default sink bypasses capsys)."""
+    r = _run_child(
+        "import henry_castillo._log as m; "
+        "m.logger.error('leak-xyz'); m.logger.info('leak2-xyz')"
+    )
+    assert r.returncode == 0, r.stderr
+    assert "leak-xyz" not in r.stderr
+    assert "leak2-xyz" not in r.stderr
+    assert r.stdout == ""
+
+
+def test_configure_false_is_silent_subprocess():
+    r = _run_child(
+        "import henry_castillo._log as m; m.configure(debug=False); "
+        "m.logger.error('silent-xyz')"
+    )
+    assert r.returncode == 0, r.stderr
+    assert "silent-xyz" not in r.stderr
+
+
+def test_configure_true_emits_on_real_stderr_subprocess():
+    """configure(debug=True) must add a sink that reaches REAL stderr
+    (fd-level), proving the debug path genuinely works end-to-end."""
+    r = _run_child(
+        "import henry_castillo._log as m; m.configure(debug=True); "
+        "m.logger.error('shown-xyz')"
+    )
+    assert r.returncode == 0, r.stderr
+    assert "shown-xyz" in r.stderr
+
+
+def test_debug_enabled_env_drives_emit_subprocess():
+    """End-to-end: HENRY_CASTILLO_DEBUG gates real-stderr output via the
+    debug_enabled→configure path a real CLI would use."""
+    code = (
+        "import henry_castillo._log as m; "
+        "m.configure(debug=m.debug_enabled(cli_flag=False)); "
+        "m.logger.error('envgate-xyz')"
+    )
+    on = _run_child(code, env={"HENRY_CASTILLO_DEBUG": "1"})
+    off = _run_child(code, env={"HENRY_CASTILLO_DEBUG": "0"})
+    assert on.returncode == 0 and off.returncode == 0, (on.stderr, off.stderr)
+    assert "envgate-xyz" in on.stderr
+    assert "envgate-xyz" not in off.stderr
