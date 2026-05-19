@@ -2,8 +2,19 @@ import socket
 import urllib.request
 
 import pytest
+from hypothesis import HealthCheck as _HealthCheck
+from hypothesis import settings as _hyp_settings
 
 import henry_castillo.__main__ as _main_mod
+
+_hyp_settings.register_profile(
+    "ci",
+    derandomize=True,
+    deadline=None,
+    print_blob=False,
+    suppress_health_check=[_HealthCheck.function_scoped_fixture],
+)
+_hyp_settings.load_profile("ci")
 
 
 @pytest.fixture(autouse=True)

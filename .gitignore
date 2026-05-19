@@ -23,6 +23,9 @@ npm-debug.log*
 /web/dist/
 /packages/npm/bin/
 
+# Hypothesis
+.hypothesis/
+
 # OS / editor
 .DS_Store
 *.swp

@@ -30,6 +30,7 @@ dev = [
   "ruff>=0.6",
   "ty>=0.0.37",
   "pre-commit>=3.8",
+  "hypothesis==6.152.5",
 ]
 
 [project.urls]
