@@ -9,8 +9,12 @@ returns empty defaults so the CLI degrades gracefully offline.
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 import unicodedata
+import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
@@ -387,3 +391,67 @@ def parse_card(data: object) -> Card:
 
 def _sanitize_json_strict_dict(x: dict) -> dict:
     return cast("dict[str, object]", _sanitize_json_strict(x, 0))
+
+
+# ---------------------------------------------------------------------------
+# Remote fetch + atomic cache + load_card (additive — all symbols above kept)
+# ---------------------------------------------------------------------------
+
+_CARD_URL = "https://d0rbu.github.io/d0rbu/data/card.json"
+_TIMEOUT = 3.0
+_MAX_BYTES = 256 * 1024
+
+
+def _card_url() -> str:
+    return os.environ.get("HENRY_CASTILLO_CARD_URL") or _CARD_URL
+
+
+def _cache_path() -> Path:
+    """Per-user cache file for the fetched card, mirroring update.py XDG logic."""
+    base = os.environ.get("XDG_CACHE_HOME")
+    if not base or not Path(base).is_absolute():
+        base = str(Path.home() / ".cache")
+    return Path(base) / "henry-castillo" / "card.json"
+
+
+def _default_fetch(url: str) -> bytes:
+    if not url.lower().startswith(("http://", "https://")):
+        raise OSError(f"refusing non-HTTP(S) URL: {url!r}")
+    request = urllib.request.Request(url, headers={"User-Agent": "henry-castillo"})  # noqa: S310
+    with urllib.request.urlopen(request, timeout=_TIMEOUT) as resp:  # noqa: S310
+        return resp.read(_MAX_BYTES)
+
+
+def _write_cache(raw: bytes) -> None:
+    path = _cache_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent))
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(raw)
+        Path(tmp).replace(path)
+    except (OSError, ValueError):
+        return  # cache is best-effort; never fatal
+
+
+def _parse_bytes(raw: bytes) -> Card:
+    return parse_card(json.loads(raw.decode("utf-8")))
+
+
+def load_card(*, fetch: Callable[[str], bytes] | None = None) -> Card:
+    do_fetch = fetch or _default_fetch
+    fetched: bytes | None = None
+    try:
+        fetched = do_fetch(_card_url())
+        card = _parse_bytes(fetched)
+    except (OSError, ValueError, CardError, RecursionError):
+        card = None
+    if card is not None and fetched is not None:
+        _write_cache(fetched)
+        return card
+    try:
+        return _parse_bytes(_cache_path().read_bytes())
+    except (OSError, ValueError, CardError, RecursionError) as exc:
+        raise CardError(
+            "no usable profile data: fetch failed and no valid cache"
+        ) from exc

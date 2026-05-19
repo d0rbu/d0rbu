@@ -1,6 +1,14 @@
 import copy
 import dataclasses
+import functools
+import http.server
+import json as _json
+import pathlib
+import socket as _socket_mod
+import socketserver
+import threading
 import unicodedata
+import urllib.request as _urllib_request
 from typing import cast
 
 import pytest
@@ -247,3 +255,163 @@ def test_shallow_nested_experience_valid():
     cast("dict[str, object]", d["resume"])["experience"] = [{"role": {"a": {"b": "c"}}}]
     c = content.parse_card(d)
     assert c.resume.experience == [{"role": {"a": {"b": "c"}}}]
+
+
+# ---------------------------------------------------------------------------
+# Fixtures and helpers for load_card / fetch / cache tests
+# ---------------------------------------------------------------------------
+
+# Save the real socket and urlopen BEFORE the autouse _block_network fixture
+# patches them. These are captured at module-import time (collection phase),
+# before any fixture runs, so they always hold the genuine implementations.
+_REAL_SOCKET = _socket_mod.socket
+_REAL_URLOPEN = _urllib_request.urlopen
+
+
+@pytest.fixture()
+def real_network(monkeypatch):
+    """Restore real socket/urlopen for tests that genuinely need localhost HTTP.
+
+    The autouse _block_network fixture replaces socket.socket and
+    urllib.request.urlopen with a deny-all stub.  This fixture (NOT autouse)
+    undoes that patch for the duration of one test by re-patching with the
+    real implementations captured at module import time (before any fixture
+    ran).  It is intentionally narrow: only the two real-localhost tests use
+    it, so the rest of the suite stays network-isolated.
+    """
+    monkeypatch.setattr(_socket_mod, "socket", _REAL_SOCKET)
+    monkeypatch.setattr(_urllib_request, "urlopen", _REAL_URLOPEN)
+
+
+def _doc_bytes(d=None):
+    return _json.dumps(d if d is not None else _VALID).encode()
+
+
+# ---------------------------------------------------------------------------
+# load_card tests
+# ---------------------------------------------------------------------------
+
+
+def test_load_card_fetch_success_caches(tmp_path, monkeypatch):
+    monkeypatch.setattr(content, "_cache_path", lambda: tmp_path / "c.json")
+    got = content.load_card(fetch=lambda _u: _doc_bytes())
+    assert isinstance(got, content.Card)
+    assert (tmp_path / "c.json").read_bytes() == _doc_bytes()
+
+
+def test_load_card_fetch_fail_uses_cache(tmp_path, monkeypatch):
+    cp = tmp_path / "c.json"
+    cp.write_bytes(_doc_bytes())
+    monkeypatch.setattr(content, "_cache_path", lambda: cp)
+    assert isinstance(
+        content.load_card(fetch=lambda _u: (_ for _ in ()).throw(OSError("offline"))),
+        content.Card,
+    )
+
+
+def test_load_card_invalid_fetch_keeps_valid_cache(tmp_path, monkeypatch):
+    cp = tmp_path / "c.json"
+    cp.write_bytes(_doc_bytes())
+    monkeypatch.setattr(content, "_cache_path", lambda: cp)
+    got = content.load_card(fetch=lambda _u: b"{not json")
+    assert isinstance(got, content.Card)
+    assert cp.read_bytes() == _doc_bytes()  # bad fetch did NOT overwrite cache
+
+
+def test_load_card_fetch_fail_no_cache_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(content, "_cache_path", lambda: tmp_path / "nope.json")
+    with pytest.raises(content.CardError):
+        content.load_card(fetch=lambda _u: (_ for _ in ()).throw(OSError()))
+
+
+def test_load_card_invalid_fetch_invalid_cache_raises(tmp_path, monkeypatch):
+    cp = tmp_path / "c.json"
+    cp.write_bytes(b"garbage")
+    monkeypatch.setattr(content, "_cache_path", lambda: cp)
+    with pytest.raises(content.CardError):
+        content.load_card(fetch=lambda _u: b"also not json")
+
+
+def test_load_card_schema_invalid_fetch_no_cache_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(content, "_cache_path", lambda: tmp_path / "nope.json")
+    with pytest.raises(content.CardError):
+        content.load_card(fetch=lambda _u: b'{"schema_version": 99}')
+
+
+def test_load_card_default_fetch_used_when_not_injected(tmp_path, monkeypatch):
+    monkeypatch.setattr(content, "_cache_path", lambda: tmp_path / "c.json")
+    calls = []
+    monkeypatch.setattr(
+        content, "_default_fetch", lambda u: calls.append(u) or _doc_bytes()
+    )
+    assert isinstance(content.load_card(), content.Card)
+    assert calls == [content._card_url()]
+
+
+def test_card_url_default_and_env_override(monkeypatch):
+    monkeypatch.delenv("HENRY_CASTILLO_CARD_URL", raising=False)
+    assert content._card_url() == "https://d0rbu.github.io/d0rbu/data/card.json"
+    monkeypatch.setenv("HENRY_CASTILLO_CARD_URL", "https://example.invalid/x.json")
+    assert content._card_url() == "https://example.invalid/x.json"
+
+
+def test_cache_path_xdg(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    p = content._cache_path()
+    assert p == tmp_path / "henry-castillo" / "card.json"
+    monkeypatch.setenv("XDG_CACHE_HOME", "relative-not-abs")
+    assert (
+        content._cache_path()
+        == pathlib.Path.home() / ".cache" / "henry-castillo" / "card.json"
+    )
+
+
+def test_write_cache_atomic_and_best_effort(tmp_path, monkeypatch):
+    cp = tmp_path / "sub" / "c.json"
+    monkeypatch.setattr(content, "_cache_path", lambda: cp)
+    content._write_cache(b"hello")
+    assert cp.read_bytes() == b"hello"
+    # best-effort: an un-writable cache dir must not raise
+    bad_path = tmp_path / "x" / "\x00bad" / "c"
+    monkeypatch.setattr(content, "_cache_path", lambda: bad_path)
+    content._write_cache(b"data")  # must not raise
+
+
+def test_default_fetch_real_localhost(tmp_path, real_network):
+    body = _doc_bytes()
+    d = tmp_path / "srv"
+    d.mkdir()
+    (d / "card.json").write_bytes(body)
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(d))
+    with socketserver.TCPServer(("127.0.0.1", 0), handler) as srv:
+        port = srv.server_address[1]
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        try:
+            assert content._default_fetch(f"http://127.0.0.1:{port}/card.json") == body
+        finally:
+            srv.shutdown()
+            t.join()
+
+
+def test_default_fetch_rejects_non_http():
+    with pytest.raises(OSError):
+        content._default_fetch("file:///etc/passwd")
+
+
+def test_default_fetch_body_cap(tmp_path, real_network):
+    big = b"x" * (300 * 1024)
+    d = tmp_path / "srv2"
+    d.mkdir()
+    (d / "big.bin").write_bytes(big)
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(d))
+    with socketserver.TCPServer(("127.0.0.1", 0), handler) as srv:
+        port = srv.server_address[1]
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        try:
+            out = content._default_fetch(f"http://127.0.0.1:{port}/big.bin")
+            assert len(out) <= content._MAX_BYTES
+        finally:
+            srv.shutdown()
+            t.join()
