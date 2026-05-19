@@ -21,10 +21,10 @@ from henry_castillo import content
 from henry_castillo.content import (
     Card,
     CardError,
-    CardLinks,
-    CardProfile,
-    CardProject,
-    CardResume,
+    Links,
+    Profile,
+    Project,
+    Resume,
 )
 
 _C = content  # short alias used in R2-fix tests below
@@ -60,23 +60,23 @@ def test_parse_valid():
     c = content.parse_card(copy.deepcopy(_VALID))
     assert isinstance(c, Card)
     assert c.schema_version == content.SCHEMA_VERSION == 1
-    assert c.profile == CardProfile(
+    assert c.profile == Profile(
         name="Henry Castillo",
         handle="d0rbu",
         tagline="Interpretability and safety researcher",
         about="DRAFT — about.",
         email="henryandrecastillo@gmail.com",
-        links=CardLinks(github="https://github.com/d0rbu", blog=""),
+        links=Links(github="https://github.com/d0rbu", blog=""),
     )
     assert c.projects == [
-        CardProject(
+        Project(
             name="mc-dreamer",
             blurb="b",
             url="https://github.com/d0rbu/mc-dreamer",
             tags=["x"],
         )
     ]
-    assert c.resume == CardResume(
+    assert c.resume == Resume(
         pdf="",
         experience=[{"org": "DRAFT —"}],
         education=[{"school": "DRAFT —"}],
@@ -138,16 +138,16 @@ def test_parse_non_dict_root(bad):
 def test_sanitize_strict_residue_note():
     # ESC (Cc) removed; the "[31m" residue text remains (acceptable per design).
     assert (
-        content._sanitize_strict("a\x1b[31mX\x1b[0m\x07b\x00\x9bc\nd\te")
+        content._sanitize("a\x1b[31mX\x1b[0m\x07b\x00\x9bc\nd\te")
         == "a[31mX[0mbc\nd\te"
     )
-    assert content._sanitize_strict("plain") == "plain"
+    assert content._sanitize("plain") == "plain"
 
 
 @pytest.mark.parametrize("cp", list(range(0x00, 0x100)))
 def test_sanitize_strict_exhaustive_latin1(cp):
     ch = chr(cp)
-    out = content._sanitize_strict(ch)
+    out = content._sanitize(ch)
     if ch in "\n\t":
         assert out == ch
     elif unicodedata.category(ch) == "Cc":
@@ -176,7 +176,7 @@ def test_parse_sanitizes_all_strings():
 
 
 def test_strict_dataclasses_have_no_defaults():
-    for dc in (CardResume, CardLinks, CardProfile, CardProject, Card):
+    for dc in (Resume, Links, Profile, Project, Card):
         for f in dataclasses.fields(dc):
             assert (
                 f.default is dataclasses.MISSING
@@ -202,15 +202,15 @@ def test_profile_missing_links_key():
 
 def test_sanitize_json_strict_passthrough():
     """Non-str/dict/list values pass through unchanged."""
-    assert content._sanitize_json_strict(42) == 42
-    assert content._sanitize_json_strict(None) is None
-    assert content._sanitize_json_strict(3.14) == 3.14
+    assert content._sanitize_json(42) == 42
+    assert content._sanitize_json(None) is None
+    assert content._sanitize_json(3.14) == 3.14
 
 
 def test_sanitize_json_strict_nested():
     """Nested dict/list sanitization recurses correctly."""
     obj = {"k\x00": ["v\x01", {"inner\x07": "data\x1b"}]}
-    result = content._sanitize_json_strict(obj)
+    result = content._sanitize_json(obj)
     assert result == {"k": ["v", {"inner": "data"}]}
 
 
@@ -247,11 +247,11 @@ def test_sanitize_json_strict_depth_bound_raises_carderror():
     for _ in range(content._MAX_JSON_DEPTH + 5):
         deep = [deep]
     with pytest.raises(content.CardError):
-        content._sanitize_json_strict(deep)
+        content._sanitize_json(deep)
 
 
 def test_sanitize_json_strict_dict_direct():
-    out = content._sanitize_json_strict_dict({"k\x00": "v\x1bx", "n": 3})
+    out = content._sanitize_json_dict({"k\x00": "v\x1bx", "n": 3})
     assert out == {"k": "vx", "n": 3}
 
 

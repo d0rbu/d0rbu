@@ -1,4 +1,4 @@
-"""Tests for render.py — strict Card/CardProfile/CardProject types."""
+"""Tests for render.py — strict Card/Profile/Project types."""
 
 import io
 import unicodedata
@@ -8,9 +8,9 @@ from rich.console import Console
 from henry_castillo import render
 from henry_castillo.content import (
     Card,
-    CardLinks,
-    CardProfile,
-    CardProject,
+    Links,
+    Profile,
+    Project,
     parse_card,
 )
 
@@ -145,12 +145,12 @@ def test_projects_tag_filter_nfc_nfd_insensitive():
     nfd = unicodedata.normalize("NFD", "café")
     nfc = unicodedata.normalize("NFC", "café")
     assert nfd != nfc
-    # Build CardProject objects directly (tags can be NFD-stored in raw JSON,
-    # but parse_card sanitizes to NFC via _sanitize_strict).  We use
-    # CardProject directly here to exercise the filter logic with NFD tags.
+    # Build Project objects directly (tags can be NFD-stored in raw JSON,
+    # but parse_card sanitizes to NFC via _sanitize).  We use
+    # Project directly here to exercise the filter logic with NFD tags.
     projs = [
-        CardProject("p-accent", "blurb", "https://x", [nfd]),
-        CardProject("p-other", "b", "https://y", ["web"]),
+        Project("p-accent", "blurb", "https://x", [nfd]),
+        Project("p-other", "b", "https://y", ["web"]),
     ]
     for query in (nfc, nfd):
         out = _text(render.projects(projs, tag=query))
@@ -161,7 +161,7 @@ def test_projects_tag_filter_nfc_nfd_insensitive():
 
 def test_projects_item_with_no_tags():
     """Covers the p.tags false branch in the table row loop."""
-    notag = CardProject("notag-proj", "blurb", "https://example.com", [])
+    notag = Project("notag-proj", "blurb", "https://example.com", [])
     out = _text(render.projects([notag]))
     assert "notag-proj" in out
 
@@ -343,13 +343,13 @@ def test_blog_url_returns_none_when_empty():
 
 
 def test_blog_url_returns_none_when_whitespace_only():
-    profile = CardProfile(
+    profile = Profile(
         name="N",
         handle="h",
         tagline="t",
         about="a",
         email="e@x.y",
-        links=CardLinks(github="https://g", blog="   "),
+        links=Links(github="https://g", blog="   "),
     )
     assert render.blog_url(profile) is None
 
@@ -407,19 +407,19 @@ def test_render_all_banner_only_once():
 
 def test_content_with_bracket_markup_renders_literally():
     """Regression: bracket substrings in content render literally, not as markup."""
-    profile = CardProfile(
+    profile = Profile(
         name="N",
         handle="h",
         tagline="t",
         about="bio [bold]x[/bold] [link]",
         email="e@x.y",
-        links=CardLinks(github="https://g/[u]", blog=""),
+        links=Links(github="https://g/[u]", blog=""),
     )
     assert "[bold]x[/bold] [link]" in _text(render.about(profile))
     assert "https://g/[u]" in _text(render.contact(profile))
 
 
 def test_project_blurb_with_brackets_renders_literally():
-    proj = [CardProject("p", "blurb [b]z[/b]", "https://u/[v]", ["t1", "t2"])]
+    proj = [Project("p", "blurb [b]z[/b]", "https://u/[v]", ["t1", "t2"])]
     out = _text(render.projects(proj))
     assert "blurb [b]z[/b]" in out and "[t1, t2]" in out and "https://u/[v]" in out

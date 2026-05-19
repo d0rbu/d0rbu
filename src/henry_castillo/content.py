@@ -1,9 +1,9 @@
-"""Typed, defensive loaders for the bundled content/*.json.
+"""Strict remote-card model: fetch/cache, parse, and typed dataclasses.
 
-Resolves content from the packaged data dir (``henry_castillo/_content`` in an
-installed wheel) and falls back to the repo-root ``content/`` directory for an
-editable/development checkout. Never raises on missing or malformed content;
-returns empty defaults so the CLI degrades gracefully offline.
+The CLI fetches card.json from GitHub Pages and caches it locally under the
+XDG cache directory.  ``load_card`` is the sole public entry point: it tries
+the remote URL first, falls back to the on-disk cache, and raises
+``CardError`` only when both are unavailable or malformed.
 """
 
 from __future__ import annotations
@@ -12,205 +12,13 @@ import contextlib
 import http.client
 import json
 import os
-import re
 import tempfile
 import unicodedata
 import urllib.request
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from importlib.resources import files
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, cast
-
-
-class _Resource(Protocol):
-    """Structural type for a bundled-content handle (pathlib.Path or an
-    importlib.resources Traversable both satisfy it)."""
-
-    def is_file(self) -> bool: ...
-
-    def read_text(self, encoding: str = ...) -> str: ...
-
-
-@dataclass(frozen=True)
-class Resume:
-    pdf: str = ""
-    experience: list[dict] = field(default_factory=list)
-    education: list[dict] = field(default_factory=list)
-    highlights: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class Profile:
-    name: str = ""
-    handle: str = ""
-    tagline: str = ""
-    about: str = ""
-    email: str = ""
-    links: dict[str, str] = field(default_factory=dict)
-    resume: Resume = field(default_factory=Resume)
-
-
-@dataclass(frozen=True)
-class Project:
-    name: str = ""
-    blurb: str = ""
-    url: str = ""
-    tags: list[str] = field(default_factory=list)
-
-
-def _packaged_resource(name: str) -> _Resource | None:
-    """The bundled ``henry_castillo/_content/<name>`` as a resource handle, or
-    ``None`` if it is not a readable packaged resource (dev checkout, or a
-    loader without resource support). Zip-safe (works under zipimport)."""
-    try:
-        resource = files("henry_castillo") / "_content" / name
-        if resource.is_file():
-            return resource
-    except (ModuleNotFoundError, TypeError, ValueError, OSError):
-        return None
-    return None
-
-
-def _repo_content_file(name: str) -> Path:
-    """The repo-root ``content/<name>`` used in an editable/dev checkout."""
-    return Path(__file__).resolve().parents[2] / "content" / name
-
-
-def _read_json(name: str) -> object:
-    """Parse a bundled JSON file. Packaged resource first, else repo-root
-    ``content/``. Never raises — returns ``None`` on any read/parse failure
-    (missing, malformed, undecodable, or pathologically nested input)."""
-    resource = _packaged_resource(name)
-    try:
-        if resource is not None:
-            text = resource.read_text(encoding="utf-8")
-        else:
-            text = _repo_content_file(name).read_text(encoding="utf-8")
-        return json.loads(text)
-    except (OSError, ValueError, RecursionError):
-        return None
-
-
-_CSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-
-
-def _sanitize(value: str) -> str:
-    """Strip ANSI CSI sequences and C0/C1 control characters (Unicode
-    category ``Cc``) except newline and tab, so terminal control/escape
-    sequences embedded in content can never reach the terminal."""
-    value = _CSI_RE.sub("", value)
-    return "".join(c for c in value if c in "\n\t" or unicodedata.category(c) != "Cc")
-
-
-def _sanitize_json(obj: object) -> object:
-    """Recursively sanitize every string inside an already-parsed JSON
-    value (bounded: json.loads has already enforced a recursion limit)."""
-    if isinstance(obj, str):
-        return _sanitize(obj)
-    if isinstance(obj, dict):
-        return {_sanitize_json(k): _sanitize_json(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_sanitize_json(v) for v in obj]
-    return obj
-
-
-def _str(value: object) -> str:
-    return _sanitize(value) if isinstance(value, str) else ""
-
-
-def load_profile() -> Profile:
-    data = _read_json("profile.json")
-    if not isinstance(data, dict):
-        return Profile()
-    d: dict[str, object] = cast("dict[str, object]", data)
-    contact = d.get("contact")
-    if isinstance(contact, dict):
-        cd: dict[str, object] = cast("dict[str, object]", contact)
-        email: object = cd.get("email")
-    else:
-        email = None
-    raw_links = d.get("links")
-    links = (
-        {
-            _sanitize(k): _sanitize(v)
-            for k, v in raw_links.items()
-            if isinstance(k, str) and isinstance(v, str)
-        }
-        if isinstance(raw_links, dict)
-        else {}
-    )
-    r = d.get("resume")
-    if isinstance(r, dict):
-        rd: dict[str, object] = cast("dict[str, object]", r)
-        raw_exp = rd.get("experience")
-        raw_edu = rd.get("education")
-        raw_hi = rd.get("highlights")
-        resume = Resume(
-            pdf=_str(rd.get("pdf")),
-            experience=cast(
-                "list[dict]",
-                [
-                    _sanitize_json(x)
-                    for x in cast("list[object]", raw_exp)
-                    if isinstance(x, dict)
-                ],
-            )
-            if isinstance(raw_exp, list)
-            else [],
-            education=cast(
-                "list[dict]",
-                [
-                    _sanitize_json(x)
-                    for x in cast("list[object]", raw_edu)
-                    if isinstance(x, dict)
-                ],
-            )
-            if isinstance(raw_edu, list)
-            else [],
-            highlights=[_sanitize(str(x)) for x in cast("list[object]", raw_hi)]
-            if isinstance(raw_hi, list)
-            else [],
-        )
-    else:
-        resume = Resume()
-    return Profile(
-        name=_str(d.get("name")),
-        handle=_str(d.get("handle")),
-        tagline=_str(d.get("tagline")),
-        about=_str(d.get("about")),
-        email=_str(email),
-        links=links,
-        resume=resume,
-    )
-
-
-def load_projects() -> list[Project]:
-    data = _read_json("projects.json")
-    if not isinstance(data, list):
-        return []
-    projects: list[Project] = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        it: dict[str, object] = cast("dict[str, object]", item)
-        raw_tags = it.get("tags")
-        projects.append(
-            Project(
-                name=_str(it.get("name")),
-                blurb=_str(it.get("blurb")),
-                url=_str(it.get("url")),
-                tags=[_sanitize(t) for t in raw_tags if isinstance(t, str)]
-                if isinstance(raw_tags, list)
-                else [],
-            )
-        )
-    return projects
-
-
-# ---------------------------------------------------------------------------
-# Strict remote-card model (additive — existing symbols above are unchanged)
-# ---------------------------------------------------------------------------
+from typing import cast
 
 
 class CardError(Exception):
@@ -218,7 +26,7 @@ class CardError(Exception):
 
 
 @dataclass(frozen=True)
-class CardResume:
+class Resume:
     pdf: str
     experience: list[dict]  # type: ignore[type-arg]
     education: list[dict]  # type: ignore[type-arg]
@@ -226,23 +34,23 @@ class CardResume:
 
 
 @dataclass(frozen=True)
-class CardLinks:
+class Links:
     github: str
     blog: str
 
 
 @dataclass(frozen=True)
-class CardProfile:
+class Profile:
     name: str
     handle: str
     tagline: str
     about: str
     email: str
-    links: CardLinks
+    links: Links
 
 
 @dataclass(frozen=True)
-class CardProject:
+class Project:
     name: str
     blurb: str
     url: str
@@ -252,31 +60,31 @@ class CardProject:
 @dataclass(frozen=True)
 class Card:
     schema_version: int
-    profile: CardProfile
-    projects: list[CardProject]
-    resume: CardResume
+    profile: Profile
+    projects: list[Project]
+    resume: Resume
 
 
 SCHEMA_VERSION = 1
 _MAX_JSON_DEPTH = 64
 
 
-def _sanitize_strict(value: str) -> str:
+def _sanitize(value: str) -> str:
     return "".join(c for c in value if c in "\n\t" or unicodedata.category(c) != "Cc")
 
 
-def _sanitize_json_strict(obj: object, _depth: int = 0) -> object:
+def _sanitize_json(obj: object, _depth: int = 0) -> object:
     if _depth > _MAX_JSON_DEPTH:
         raise CardError("resume: nested data too deeply nested")
     if isinstance(obj, str):
-        return _sanitize_strict(obj)
+        return _sanitize(obj)
     if isinstance(obj, dict):
         return {
-            _sanitize_json_strict(k, _depth + 1): _sanitize_json_strict(v, _depth + 1)
+            _sanitize_json(k, _depth + 1): _sanitize_json(v, _depth + 1)
             for k, v in obj.items()
         }
     if isinstance(obj, list):
-        return [_sanitize_json_strict(v, _depth + 1) for v in obj]
+        return [_sanitize_json(v, _depth + 1) for v in obj]
     return obj
 
 
@@ -284,20 +92,20 @@ def _req(d: dict[str, object], parent_path: str, key: str) -> str:
     v = d.get(key)
     if not isinstance(v, str) or v == "":
         raise CardError(f"{parent_path}.{key}: expected a non-empty string")
-    return _sanitize_strict(v)
+    return _sanitize(v)
 
 
 def _opt(d: dict[str, object], key: str, path: str) -> str:
     v = d.get(key)
     if not isinstance(v, str):
         raise CardError(f'{path}: expected a string (use "" if none)')
-    return _sanitize_strict(v)
+    return _sanitize(v)
 
 
 _CARD_REQUIRED_KEYS = {"schema_version", "profile", "projects", "resume"}
 
 
-def _parse_profile(p: object) -> CardProfile:
+def _parse_profile(p: object) -> Profile:
     if not isinstance(p, dict):
         raise CardError("profile.name: profile is missing or not an object")
     pd: dict[str, object] = cast("dict[str, object]", p)
@@ -310,11 +118,11 @@ def _parse_profile(p: object) -> CardProfile:
     if not isinstance(lk, dict):
         raise CardError("links.github: profile.links missing or not an object")
     ld: dict[str, object] = cast("dict[str, object]", lk)
-    links = CardLinks(
+    links = Links(
         github=_req(ld, "links", "github"),
         blog=_opt(ld, "blog", "links.blog"),
     )
-    return CardProfile(
+    return Profile(
         name=name,
         handle=handle,
         tagline=tagline,
@@ -324,7 +132,7 @@ def _parse_profile(p: object) -> CardProfile:
     )
 
 
-def _parse_project(it: object, i: int) -> CardProject:
+def _parse_project(it: object, i: int) -> Project:
     if not isinstance(it, dict):
         raise CardError(f"projects[{i}]: not an object")
     itd: dict[str, object] = cast("dict[str, object]", it)
@@ -332,15 +140,15 @@ def _parse_project(it: object, i: int) -> CardProject:
     if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
         raise CardError(f"projects[{i}].tags: expected list[str]")
     str_tags: list[str] = cast("list[str]", tags)
-    return CardProject(
+    return Project(
         name=_req(itd, f"projects[{i}]", "name"),
         blurb=_opt(itd, "blurb", f"projects[{i}].blurb"),
         url=_req(itd, f"projects[{i}]", "url"),
-        tags=[_sanitize_strict(t) for t in str_tags],
+        tags=[_sanitize(t) for t in str_tags],
     )
 
 
-def _parse_resume(r: object) -> CardResume:
+def _parse_resume(r: object) -> Resume:
     if not isinstance(r, dict):
         raise CardError("resume: missing or not an object")
     rd: dict[str, object] = cast("dict[str, object]", r)
@@ -356,11 +164,11 @@ def _parse_resume(r: object) -> CardResume:
     exp_dicts: list[dict[str, object]] = cast("list[dict[str, object]]", exp)
     edu_dicts: list[dict[str, object]] = cast("list[dict[str, object]]", edu)
     hi_strs: list[str] = cast("list[str]", hi)
-    return CardResume(
+    return Resume(
         pdf=_opt(rd, "pdf", "resume.pdf"),
-        experience=[_sanitize_json_strict_dict(x) for x in exp_dicts],
-        education=[_sanitize_json_strict_dict(x) for x in edu_dicts],
-        highlights=[_sanitize_strict(x) for x in hi_strs],
+        experience=[_sanitize_json_dict(x) for x in exp_dicts],
+        education=[_sanitize_json_dict(x) for x in edu_dicts],
+        highlights=[_sanitize(x) for x in hi_strs],
     )
 
 
@@ -391,12 +199,12 @@ def parse_card(data: object) -> Card:
     )
 
 
-def _sanitize_json_strict_dict(x: dict) -> dict:
-    return cast("dict[str, object]", _sanitize_json_strict(x, 0))
+def _sanitize_json_dict(x: dict) -> dict:
+    return cast("dict[str, object]", _sanitize_json(x, 0))
 
 
 # ---------------------------------------------------------------------------
-# Remote fetch + atomic cache + load_card (additive — all symbols above kept)
+# Remote fetch + atomic cache + load_card
 # ---------------------------------------------------------------------------
 
 _CARD_URL = "https://d0rbu.github.io/d0rbu/data/card.json"

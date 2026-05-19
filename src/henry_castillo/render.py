@@ -14,17 +14,17 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from henry_castillo.content import Card, CardProfile, CardProject
+from henry_castillo.content import Card, Profile, Project
 
 
-def banner(profile: CardProfile) -> RenderableType:
+def banner(profile: Profile) -> RenderableType:
     line = Text(profile.name, style="bold cyan")
     line.append(f"  ·  @{profile.handle}", style="green")
     line.append(f"\n{profile.tagline}", style="dim")
     return Panel(line, expand=False, border_style="cyan")
 
 
-def about(profile: CardProfile) -> RenderableType:
+def about(profile: Profile) -> RenderableType:
     return Panel(
         Text(profile.about),
         title="About",
@@ -32,7 +32,7 @@ def about(profile: CardProfile) -> RenderableType:
     )
 
 
-def projects(projects: list[CardProject], tag: str | None = None) -> RenderableType:
+def projects(projects: list[Project], tag: str | None = None) -> RenderableType:
     items = list(projects)
     if tag is not None:
         wanted = unicodedata.normalize("NFC", tag).casefold()
@@ -98,19 +98,19 @@ def resume(card: Card) -> RenderableType:
     return Panel(Group(*parts), title="Résumé", border_style="cyan")
 
 
-def contact(profile: CardProfile) -> RenderableType:
+def contact(profile: Profile) -> RenderableType:
     lines: list[str] = []
     lines.append(f"Email:  {profile.email}")
     lines.append(f"GitHub:  {profile.links.github}")
     return Panel(Text("\n".join(lines)), title="Contact", border_style="cyan")
 
 
-def blog_url(profile: CardProfile) -> str | None:
+def blog_url(profile: Profile) -> str | None:
     url = profile.links.blog.strip()
     return url or None
 
 
-def blog(profile: CardProfile) -> RenderableType:
+def blog(profile: Profile) -> RenderableType:
     url = blog_url(profile)
     if url is None:
         return Panel(

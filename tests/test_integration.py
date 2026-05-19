@@ -209,7 +209,7 @@ def test_non_tty_no_card_failure_path():
         )
     assert r.returncode == 1, f"Expected rc=1, got {r.returncode}"
     # Friendly message on stderr
-    assert "no usable profile data" in r.stderr.lower() or r.stderr, (
+    assert "no usable profile data" in r.stderr.lower(), (
         f"Expected failure message on stderr, got: {r.stderr!r}"
     )
     assert "henryandrecastillo@gmail.com" in r.stderr
