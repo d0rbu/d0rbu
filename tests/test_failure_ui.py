@@ -1,7 +1,10 @@
 import io
 import os
+import select as _select
+import termios
 import time
 
+import pytest
 from rich.console import Console
 
 from henry_castillo import failure_ui as F  # noqa: N812
@@ -111,7 +114,9 @@ def test_default_open_url_uses_webbrowser(monkeypatch):
 def test_default_wait_for_keypress_timeout_false():
     primary, secondary = os.openpty()
     try:
+        saved = termios.tcgetattr(secondary)
         assert F._default_wait_for_keypress(0.05, stream_fd=secondary) is False
+        assert termios.tcgetattr(secondary) == saved, "terminal attrs not restored"
     finally:
         os.close(primary)
         os.close(secondary)
@@ -120,9 +125,26 @@ def test_default_wait_for_keypress_timeout_false():
 def test_default_wait_for_keypress_key_true():
     primary, secondary = os.openpty()
     try:
+        saved = termios.tcgetattr(secondary)
         os.write(primary, b"x")
         time.sleep(0.02)
         assert F._default_wait_for_keypress(1.0, stream_fd=secondary) is True
+        assert termios.tcgetattr(secondary) == saved, "terminal attrs not restored"
+    finally:
+        os.close(primary)
+        os.close(secondary)
+
+
+def test_default_wait_for_keypress_restores_on_select_error(monkeypatch):
+    primary, secondary = os.openpty()
+    try:
+        saved = termios.tcgetattr(secondary)
+        monkeypatch.setattr(
+            _select, "select", lambda *_a, **_k: (_ for _ in ()).throw(OSError("boom"))
+        )
+        with pytest.raises(OSError):
+            F._default_wait_for_keypress(0.05, stream_fd=secondary)
+        assert termios.tcgetattr(secondary) == saved, "attrs not restored on error"
     finally:
         os.close(primary)
         os.close(secondary)
