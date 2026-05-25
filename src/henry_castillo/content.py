@@ -9,7 +9,9 @@ the remote URL first, falls back to the on-disk cache, and raises
 from __future__ import annotations
 
 import contextlib
+import functools
 import http.client
+import importlib.resources
 import json
 import os
 import tempfile
@@ -18,9 +20,13 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
+import jsonschema
+import jsonschema.exceptions
 from packaging.version import InvalidVersion, Version
+
+from henry_castillo import _log
 
 
 class CardError(Exception):
@@ -77,6 +83,32 @@ class Card:
 
 SCHEMA_VERSION = 2
 _MAX_JSON_DEPTH = 64
+
+
+@functools.lru_cache(maxsize=1)
+def _schema() -> dict:  # type: ignore[type-arg]
+    text = (
+        importlib.resources.files("henry_castillo")
+        .joinpath("card.schema.json")
+        .read_text(encoding="utf-8")
+    )
+    return cast("dict[str, object]", json.loads(text))
+
+
+@functools.lru_cache(maxsize=1)
+def _validator() -> Any:
+    return jsonschema.Draft202012Validator(_schema())
+
+
+def _validate_schema(doc: object) -> None:
+    try:
+        _validator().validate(doc)
+    except jsonschema.exceptions.ValidationError as exc:
+        _log.logger.error("card.json failed schema validation: {}", exc.message)
+        path = "/".join(str(p) for p in exc.absolute_path) or "(root)"
+        raise CardError(
+            f"card.json does not match the expected schema at {path}: {exc.message}"
+        ) from exc
 
 
 def _sanitize(value: str) -> str:
@@ -317,7 +349,9 @@ def _write_cache(raw: bytes) -> None:
 def _parse_bytes(raw: bytes) -> Card:
     if not isinstance(raw, bytes):
         raise CardError("fetched body is not bytes")
-    return parse_card(json.loads(raw.decode("utf-8")))
+    doc = json.loads(raw.decode("utf-8"))
+    _validate_schema(doc)
+    return parse_card(doc)
 
 
 def load_card(*, fetch: Callable[[str], bytes] | None = None) -> Card:

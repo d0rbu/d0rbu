@@ -16,3 +16,7 @@ cpSync(
   resolve(__dirname, "data", "card.json"),
   resolve(dist, "data", "card.json"),
 );
+cpSync(
+  resolve(__dirname, "..", "src", "henry_castillo", "card.schema.json"),
+  resolve(dist, "data", "card.schema.json"),
+);

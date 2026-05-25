@@ -17,7 +17,7 @@ from typing import cast
 
 import pytest
 
-from henry_castillo import content
+from henry_castillo import _log, content
 from henry_castillo.content import (
     Card,
     CardError,
@@ -833,3 +833,81 @@ def test_new_demos_version_ordering():
     card = content.parse_card(d)
     result = content.new_demos(card, current="1.0.0")
     assert [dm.name for dm in result] == ["patch", "post", "rc"]
+
+
+# ---------------------------------------------------------------------------
+# JSON Schema runtime validation (_validate_schema / _parse_bytes)
+# ---------------------------------------------------------------------------
+
+
+def test_load_card_schema_invalid_missing_keys_raises(tmp_path, monkeypatch):
+    """load_card raises CardError when the fetched JSON is missing required keys."""
+    monkeypatch.setattr(content, "_cache_path", lambda: tmp_path / "nope.json")
+    with pytest.raises(content.CardError):
+        content.load_card(fetch=lambda _u: b'{"schema_version": 2}')
+
+
+def test_load_card_schema_invalid_extra_key_raises(tmp_path, monkeypatch):
+    """load_card raises CardError when the JSON has an unexpected extra key."""
+    monkeypatch.setattr(content, "_cache_path", lambda: tmp_path / "nope.json")
+    bad = copy.deepcopy(_VALID)
+    bad["unexpected_extra"] = "oops"
+    with pytest.raises(content.CardError):
+        content.load_card(fetch=lambda _u: _json.dumps(bad).encode())
+
+
+def test_load_card_schema_invalid_demos_wrong_type_raises(tmp_path, monkeypatch):
+    """load_card raises CardError when demos is not an array."""
+    monkeypatch.setattr(content, "_cache_path", lambda: tmp_path / "nope.json")
+    bad = copy.deepcopy(_VALID)
+    bad["demos"] = "not-a-list"
+    with pytest.raises(content.CardError):
+        content.load_card(fetch=lambda _u: _json.dumps(bad).encode())
+
+
+def test_load_card_schema_valid_body_loads(tmp_path, monkeypatch):
+    """load_card successfully loads a schema-valid body via fetch."""
+    monkeypatch.setattr(content, "_cache_path", lambda: tmp_path / "c.json")
+    got = content.load_card(fetch=lambda _u: _doc_bytes())
+    assert isinstance(got, content.Card)
+    assert got.schema_version == 2
+
+
+def test_validate_schema_logs_error_on_validation_failure():
+    """_validate_schema logs at ERROR level when the doc fails validation."""
+    captured: list[str] = []
+
+    def _sink(msg: str) -> None:
+        captured.append(msg)
+
+    sink_id = _log.logger.add(_sink, level="ERROR")
+    try:
+        with pytest.raises(content.CardError, match="schema"):
+            content._validate_schema({"schema_version": 99})
+    finally:
+        _log.logger.remove(sink_id)
+    assert any("schema validation" in m for m in captured)
+
+
+def test_validate_schema_path_in_error_message():
+    """_validate_schema CardError message includes the path of the offending field."""
+    # An invalid type for profile.name (not a string) → path includes 'name'
+    bad = copy.deepcopy(_VALID)
+    cast("dict[str, object]", bad["profile"])["name"] = 123
+    with pytest.raises(content.CardError) as ei:
+        content._validate_schema(bad)
+    assert "profile/name" in str(ei.value)
+
+
+def test_validate_schema_passes_valid_doc():
+    """_validate_schema does not raise for a fully valid document."""
+    content._validate_schema(copy.deepcopy(_VALID))  # must not raise
+
+
+def test_validate_schema_root_path_label():
+    """When the error is at the root level, the path label is '(root)'."""
+    # A non-object root triggers root-level error.
+    with pytest.raises(content.CardError) as ei:
+        content._validate_schema("not-an-object")
+    # The error path should say '(root)' since absolute_path is empty.
+    assert "(root)" in str(ei.value)
