@@ -181,7 +181,17 @@ def main(argv: list[str] | None = None) -> int:
             if (not args.no_update_check and not _update_check_disabled_by_env())
             else None
         )
-        tui.run(card, console=console, update_available=latest is not None)
+        new = (
+            content.new_demos(card, current=_update.current_version())
+            if latest is not None
+            else []
+        )
+        tui.run(
+            card,
+            console=console,
+            update_available=latest is not None,
+            new_demos=new,
+        )
     else:
         render.render_all(console, card)
         _maybe_notice(args)

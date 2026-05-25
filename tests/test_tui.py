@@ -8,6 +8,7 @@ from rich.console import Console
 from henry_castillo import tui
 from henry_castillo.content import (
     Card,
+    Demo,
     parse_card,
 )
 
@@ -185,18 +186,23 @@ def test_demos_no_badge_when_update_not_available():
     assert "newer henry-castillo" not in out
 
 
-def test_demos_badge_shown_when_update_available():
+def test_demos_badge_shown_when_update_available_and_new_demos():
+    """Badge shown only when BOTH update_available=True AND new_demos non-empty."""
     console, buf = _console()
     seq = iter(["Demos (under construction)", None])
+    demos = [Demo("alpha", "does alpha", "0.2.0")]
     tui.run(
         CARD,
         console=console,
         select=lambda *_a, **_k: next(seq),
         open_url=lambda _u: None,
         update_available=True,
+        new_demos=demos,
     )
     out = buf.getvalue()
-    assert "newer henry-castillo" in out
+    assert "New demos" in out
+    assert "alpha" in out
+    assert "does alpha" in out
 
 
 def test_demos_continues_loop_does_not_render_section():
@@ -373,3 +379,74 @@ def test_run_open_url_defaults_to_webbrowser(monkeypatch):
     seq = iter(["Blog", None])
     tui.run(CARD, console=console, select=lambda *_a, **_k: next(seq))
     assert calls == ["https://s.substack.com"]
+
+
+# ---------------------------------------------------------------------------
+# Demos badge: 4-cell truth table (update_available x new_demos)
+# ---------------------------------------------------------------------------
+
+_ALPHA = Demo("alpha", "does alpha", "0.2.0")
+_BETA = Demo("beta", "does beta", "0.3.0")
+
+
+def _demos_run(*, update_available: bool, new_demos):
+    """Helper: select Demos then quit, return captured output."""
+    console, buf = _console()
+    seq = iter(["Demos (under construction)", None])
+    tui.run(
+        CARD,
+        console=console,
+        select=lambda *_a, **_k: next(seq),
+        open_url=lambda _u: None,
+        update_available=update_available,
+        new_demos=new_demos,
+    )
+    return buf.getvalue()
+
+
+def test_demos_truth_table_false_empty():
+    """(update_available=False, new_demos=[]) → under-construction, NO badge."""
+    out = _demos_run(update_available=False, new_demos=[])
+    assert "under construction" in out.lower()
+    assert "New demos" not in out
+    assert "●" not in out
+
+
+def test_demos_truth_table_false_nonempty():
+    """(update_available=False, new_demos=[Demo]) → still NO badge (both required)."""
+    out = _demos_run(update_available=False, new_demos=[_ALPHA])
+    assert "under construction" in out.lower()
+    assert "New demos" not in out
+    assert "alpha" not in out
+
+
+def test_demos_truth_table_true_empty():
+    """(update_available=True, new_demos=[]) → NO badge."""
+    out = _demos_run(update_available=True, new_demos=[])
+    assert "under construction" in out.lower()
+    assert "New demos" not in out
+    assert "●" not in out
+
+
+def test_demos_truth_table_true_nonempty():
+    """(update_available=True, new_demos=[alpha, beta]) → full badge with demos."""
+    out = _demos_run(update_available=True, new_demos=[_ALPHA, _BETA])
+    assert "under construction" in out.lower()
+    assert "New demos" in out
+    assert "henry-castillo --update" in out
+    assert "● alpha — does alpha" in out
+    assert "● beta — does beta" in out
+
+
+# ---------------------------------------------------------------------------
+# Markup / control-char safety: demo fields with rich markup shown literally
+# ---------------------------------------------------------------------------
+
+
+def test_demos_badge_markup_safe():
+    """Rich markup in demo name/summary is shown literally (Text wrapping)."""
+    markup_demo = Demo("[red]x[/red]", "[bold]y[/bold]", "0.9.0")
+    out = _demos_run(update_available=True, new_demos=[markup_demo])
+    # The raw markup brackets must appear in the output verbatim
+    assert "[red]x[/red]" in out
+    assert "[bold]y[/bold]" in out

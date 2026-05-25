@@ -8,14 +8,14 @@ is fully unit-testable without a real terminal. The defaults wrap
 from __future__ import annotations
 
 import webbrowser
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import questionary
 from rich.console import Console
 from rich.text import Text
 
 from henry_castillo import render
-from henry_castillo.content import Card
+from henry_castillo.content import Card, Demo
 
 _MENU = [name for name, _ in render.SECTIONS]
 _DEMOS = "Demos (under construction)"
@@ -44,6 +44,7 @@ def run(
     select: SelectFn | None = None,
     open_url: OpenUrlFn | None = None,
     update_available: bool = False,
+    new_demos: Sequence[Demo] = (),
 ) -> None:
     select = select or _default_select
     open_url = open_url or _default_open_url
@@ -57,13 +58,15 @@ def run(
             return
         if choice == _DEMOS:
             console.print(Text("Demos are under construction…"))
-            if update_available:
+            if update_available and new_demos:
                 console.print(
                     Text(
-                        "● a newer henry-castillo is available — run"
-                        " `henry-castillo --update`"
+                        "New demos in a newer henry-castillo"
+                        " — run `henry-castillo --update`:"
                     )
                 )
+                for demo in new_demos:
+                    console.print(Text(f"● {demo.name} — {demo.summary}"))
             continue
         renderer = sections.get(choice)
         if renderer is None:

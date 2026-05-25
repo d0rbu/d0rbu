@@ -893,3 +893,59 @@ def test_tui_run_receives_update_available_false_when_check_suppressed(monkeypat
     rc = main(["--no-update-check"])
     assert rc == 0
     assert captured.get("update_available") is False
+
+
+# ---------------------------------------------------------------------------
+# new_demos wiring: __main__ computes new_demos only when update available
+# ---------------------------------------------------------------------------
+
+
+def _card_with_high_min_version():
+    """Return a card whose sole demo has min_version=999.0.0 (always newer)."""
+    demo = {
+        "name": "futuredemo",
+        "summary": "from the future",
+        "min_version": "999.0.0",
+    }
+    doc = {**_VALID_DOC, "demos": [demo]}
+    return parse_card(doc)
+
+
+def test_tui_run_receives_nonempty_new_demos_when_update_exists(monkeypatch):
+    """When update available + card has a high min_version demo, new_demos non-empty."""
+    high_card = _card_with_high_min_version()
+    monkeypatch.setattr(_m.content, "load_card", lambda **k: high_card)
+    monkeypatch.setattr(up, "check_for_update", lambda **k: "9.9.9")
+    monkeypatch.setattr(up, "current_version", lambda: __version__)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    captured: dict = {}
+
+    def fake_run(card, *, console, update_available, new_demos, **kw):
+        captured["update_available"] = update_available
+        captured["new_demos"] = list(new_demos)
+
+    monkeypatch.setattr(_m.tui, "run", fake_run)
+    rc = main([])
+    assert rc == 0
+    assert captured.get("update_available") is True
+    assert len(captured.get("new_demos", [])) == 1
+    assert captured["new_demos"][0].name == "futuredemo"
+
+
+def test_tui_run_receives_empty_new_demos_when_no_update(monkeypatch):
+    """When no update available, new_demos passed as [] regardless of card demos."""
+    high_card = _card_with_high_min_version()
+    monkeypatch.setattr(_m.content, "load_card", lambda **k: high_card)
+    monkeypatch.setattr(up, "check_for_update", lambda **k: None)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    captured: dict = {}
+
+    def fake_run(card, *, console, update_available, new_demos, **kw):
+        captured["update_available"] = update_available
+        captured["new_demos"] = list(new_demos)
+
+    monkeypatch.setattr(_m.tui, "run", fake_run)
+    rc = main([])
+    assert rc == 0
+    assert captured.get("update_available") is False
+    assert captured.get("new_demos") == []
