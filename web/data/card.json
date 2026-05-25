@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "profile": {
     "name": "Henry Castillo",
     "handle": "d0rbu",
@@ -45,5 +45,6 @@
     "highlights": [
       "DRAFT — add résumé highlights"
     ]
-  }
+  },
+  "demos": []
 }

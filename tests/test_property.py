@@ -25,6 +25,14 @@ _text = st.text(max_size=40)
 # needed for non-empty check).  We filter out "" only to satisfy _req.
 _req_str = _text.filter(lambda s: s != "")
 
+# PEP 440-valid version strings for demo min_version.
+_version_str = st.builds(
+    lambda a, b, c: f"{a}.{b}.{c}",
+    st.integers(0, 9),
+    st.integers(0, 9),
+    st.integers(0, 9),
+)
+
 
 def _has_cc(s: str) -> bool:
     return any(c not in "\n\t" and unicodedata.category(c) == "Cc" for c in s)
@@ -72,6 +80,16 @@ _valid_doc = st.fixed_dictionaries(
                 "highlights": st.lists(_text, max_size=4),
             }
         ),
+        "demos": st.lists(
+            st.fixed_dictionaries(
+                {
+                    "name": _req_str,
+                    "summary": _req_str,
+                    "min_version": _version_str,
+                }
+            ),
+            max_size=3,
+        ),
     }
 )
 
@@ -108,6 +126,9 @@ def test_parse_valid_doc_yields_clean_card(doc):
     assert not _has_cc(json.dumps(card.resume.experience + card.resume.education))
     for h in card.resume.highlights:
         assert not _has_cc(h)
+    for demo in card.demos:
+        for s in (demo.name, demo.summary):
+            assert not _has_cc(s)
 
 
 @given(_valid_doc)

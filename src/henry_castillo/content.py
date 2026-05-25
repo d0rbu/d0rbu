@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from packaging.version import InvalidVersion, Version
+
 
 class CardError(Exception):
     """Card data missing/malformed; message names the offending path."""
@@ -58,14 +60,22 @@ class Project:
 
 
 @dataclass(frozen=True)
+class Demo:
+    name: str
+    summary: str
+    min_version: str
+
+
+@dataclass(frozen=True)
 class Card:
     schema_version: int
     profile: Profile
     projects: list[Project]
     resume: Resume
+    demos: list[Demo]
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _MAX_JSON_DEPTH = 64
 
 
@@ -106,13 +116,23 @@ def _opt(d: dict[str, object], key: str, path: str) -> str:
     return _sanitize(v)
 
 
-_CARD_REQUIRED_KEYS = {"schema_version", "profile", "projects", "resume"}
+_CARD_REQUIRED_KEYS = {"schema_version", "profile", "projects", "resume", "demos"}
+_CARD_ALLOWED_KEYS = _CARD_REQUIRED_KEYS | {"$schema"}
+
+
+def _reject_unknown(d: dict[str, object], allowed: set[str], path: str) -> None:
+    extra = set(d.keys()) - allowed
+    if extra:
+        raise CardError(f"{path}: unexpected key(s): {sorted(extra)}")
 
 
 def _parse_profile(p: object) -> Profile:
     if not isinstance(p, dict):
         raise CardError("profile.name: profile is missing or not an object")
     pd: dict[str, object] = cast("dict[str, object]", p)
+    _reject_unknown(
+        pd, {"name", "handle", "tagline", "about", "email", "links"}, "profile"
+    )
     name = _req(pd, "profile", "name")
     handle = _req(pd, "profile", "handle")
     tagline = _req(pd, "profile", "tagline")
@@ -122,6 +142,7 @@ def _parse_profile(p: object) -> Profile:
     if not isinstance(lk, dict):
         raise CardError("links.github: profile.links missing or not an object")
     ld: dict[str, object] = cast("dict[str, object]", lk)
+    _reject_unknown(ld, {"github", "blog"}, "profile.links")
     links = Links(
         github=_req(ld, "links", "github"),
         blog=_opt(ld, "blog", "links.blog"),
@@ -140,6 +161,7 @@ def _parse_project(it: object, i: int) -> Project:
     if not isinstance(it, dict):
         raise CardError(f"projects[{i}]: not an object")
     itd: dict[str, object] = cast("dict[str, object]", it)
+    _reject_unknown(itd, {"name", "blurb", "url", "tags"}, f"projects[{i}]")
     tags = itd.get("tags")
     if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
         raise CardError(f"projects[{i}].tags: expected list[str]")
@@ -156,6 +178,7 @@ def _parse_resume(r: object) -> Resume:
     if not isinstance(r, dict):
         raise CardError("resume: missing or not an object")
     rd: dict[str, object] = cast("dict[str, object]", r)
+    _reject_unknown(rd, {"pdf", "experience", "education", "highlights"}, "resume")
     exp = rd.get("experience")
     edu = rd.get("education")
     hi = rd.get("highlights")
@@ -176,6 +199,21 @@ def _parse_resume(r: object) -> Resume:
     )
 
 
+def _parse_demo(it: object, i: int) -> Demo:
+    if not isinstance(it, dict):
+        raise CardError(f"demos[{i}]: expected an object")
+    itd: dict[str, object] = cast("dict[str, object]", it)
+    _reject_unknown(itd, {"name", "summary", "min_version"}, f"demos[{i}]")
+    name = _req(itd, f"demos[{i}]", "name")
+    summary = _req(itd, f"demos[{i}]", "summary")
+    mv = _req(itd, f"demos[{i}]", "min_version")
+    try:
+        Version(mv)
+    except InvalidVersion:
+        raise CardError(f"demos[{i}].min_version: not a valid version") from None
+    return Demo(name=name, summary=summary, min_version=mv)
+
+
 def parse_card(data: object) -> Card:
     if not isinstance(data, dict):
         raise CardError("card: root is not an object")
@@ -184,6 +222,7 @@ def parse_card(data: object) -> Card:
         raise CardError(
             f"card: missing required keys {_CARD_REQUIRED_KEYS - dd.keys()!r}"
         )
+    _reject_unknown(dd, _CARD_ALLOWED_KEYS, "card")
     sv = dd.get("schema_version")
     if not isinstance(sv, int) or isinstance(sv, bool) or sv != SCHEMA_VERSION:
         raise CardError(
@@ -195,12 +234,29 @@ def parse_card(data: object) -> Card:
     raw_projects = dd.get("projects")
     if not isinstance(raw_projects, list) or not raw_projects:
         raise CardError("projects: expected a non-empty list")
+    raw_demos = dd.get("demos")
+    if not isinstance(raw_demos, list):
+        raise CardError("demos: expected a list")
     return Card(
         schema_version=sv_int,
         profile=_parse_profile(dd.get("profile")),
         projects=[_parse_project(it, i) for i, it in enumerate(raw_projects)],
         resume=_parse_resume(dd.get("resume")),
+        demos=[_parse_demo(it, i) for i, it in enumerate(raw_demos)],
     )
+
+
+def new_demos(card: Card, *, current: str) -> list[Demo]:
+    """Demos whose min_version is strictly greater than `current`.
+
+    ``current`` must be a valid PEP 440 version string; raises ``CardError``
+    otherwise.
+    """
+    try:
+        cur = Version(current)
+    except InvalidVersion:
+        raise CardError(f"new_demos: invalid current version {current!r}") from None
+    return [d for d in card.demos if Version(d.min_version) > cur]
 
 
 # ---------------------------------------------------------------------------

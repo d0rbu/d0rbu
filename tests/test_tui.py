@@ -27,7 +27,7 @@ _TUI_PROFILE_DOC: dict[str, object] = {
     },
 }
 _VALID_DOC: dict[str, object] = {
-    "schema_version": 1,
+    "schema_version": 2,
     "profile": _TUI_PROFILE_DOC,
     "projects": [
         {
@@ -43,6 +43,7 @@ _VALID_DOC: dict[str, object] = {
         "education": [],
         "highlights": [],
     },
+    "demos": [],
 }
 
 CARD: Card = parse_card(_VALID_DOC)

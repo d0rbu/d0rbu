@@ -55,7 +55,7 @@ _CLI_RESUME_DOC: dict[str, object] = {
     "highlights": ["Published a paper"],
 }
 _VALID_DOC: dict[str, object] = {
-    "schema_version": 1,
+    "schema_version": 2,
     "profile": _CLI_PROFILE_DOC,
     "projects": [
         {
@@ -66,6 +66,7 @@ _VALID_DOC: dict[str, object] = {
         }
     ],
     "resume": _CLI_RESUME_DOC,
+    "demos": [],
 }
 
 _VALID_CARD = parse_card(_VALID_DOC)

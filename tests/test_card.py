@@ -21,6 +21,7 @@ from henry_castillo import content
 from henry_castillo.content import (
     Card,
     CardError,
+    Demo,
     Links,
     Profile,
     Project,
@@ -30,7 +31,7 @@ from henry_castillo.content import (
 _C = content  # short alias used in R2-fix tests below
 
 _VALID: dict[str, object] = {
-    "schema_version": 1,
+    "schema_version": 2,
     "profile": {
         "name": "Henry Castillo",
         "handle": "d0rbu",
@@ -53,13 +54,14 @@ _VALID: dict[str, object] = {
         "education": [{"school": "DRAFT —"}],
         "highlights": ["DRAFT —"],
     },
+    "demos": [],
 }
 
 
 def test_parse_valid():
     c = content.parse_card(copy.deepcopy(_VALID))
     assert isinstance(c, Card)
-    assert c.schema_version == content.SCHEMA_VERSION == 1
+    assert c.schema_version == content.SCHEMA_VERSION == 2
     assert c.profile == Profile(
         name="Henry Castillo",
         handle="d0rbu",
@@ -82,12 +84,13 @@ def test_parse_valid():
         education=[{"school": "DRAFT —"}],
         highlights=["DRAFT —"],
     )
+    assert c.demos == []
 
 
 @pytest.mark.parametrize(
     "mutate,msg",
     [
-        (lambda d: d.__setitem__("schema_version", 2), "schema_version"),
+        (lambda d: d.__setitem__("schema_version", 1), "schema_version"),
         (lambda d: d.pop("schema_version"), "schema_version"),
         (lambda d: d.__setitem__("schema_version", "1"), "schema_version"),
         (lambda d: d.__setitem__("schema_version", True), "schema_version"),
@@ -176,7 +179,7 @@ def test_parse_sanitizes_all_strings():
 
 
 def test_strict_dataclasses_have_no_defaults():
-    for dc in (Resume, Links, Profile, Project, Card):
+    for dc in (Resume, Links, Profile, Project, Demo, Card):
         for f in dataclasses.fields(dc):
             assert (
                 f.default is dataclasses.MISSING
@@ -564,3 +567,269 @@ def test_write_cache_finally_unlink_oserror_suppressed(tmp_path, monkeypatch):
     monkeypatch.setattr(pathlib.Path, "replace", boom_replace)
     monkeypatch.setattr(pathlib.Path, "unlink", boom_unlink)
     _C._write_cache(b"data")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# schema_version 1 is rejected
+# ---------------------------------------------------------------------------
+
+
+def test_schema_version_1_is_rejected():
+    """schema_version==1 is no longer current and must raise CardError."""
+    with pytest.raises(CardError):
+        content.parse_card({**_VALID, "schema_version": 1})
+
+
+# ---------------------------------------------------------------------------
+# Root unknown-key rejection + $schema passthrough
+# ---------------------------------------------------------------------------
+
+
+def test_parse_rejects_extra_root_key():
+    """An extra top-level key that isn't in _CARD_ALLOWED_KEYS raises CardError."""
+    d = copy.deepcopy(_VALID)
+    d["oops"] = 1
+    with pytest.raises(CardError, match="card"):
+        content.parse_card(d)
+
+
+def test_parse_allows_dollar_schema_root_key():
+    """$schema at the root is explicitly allowed and ignored; Card builds fine."""
+    d = copy.deepcopy(_VALID)
+    d["$schema"] = "https://example.com/card.schema.json"
+    card = content.parse_card(d)
+    assert isinstance(card, Card)
+    assert card.schema_version == 2
+
+
+# ---------------------------------------------------------------------------
+# Nested unknown-key rejection
+# ---------------------------------------------------------------------------
+
+
+def test_parse_rejects_extra_profile_key():
+    """An extra key inside profile raises CardError mentioning 'profile'."""
+    d = copy.deepcopy(_VALID)
+    cast("dict[str, object]", d["profile"])["stray"] = "x"
+    with pytest.raises(CardError, match="profile"):
+        content.parse_card(d)
+
+
+def test_parse_rejects_extra_links_key():
+    """An extra key inside profile.links raises CardError mentioning 'profile.links'."""
+    d = copy.deepcopy(_VALID)
+    cast("dict[str, object]", cast("dict[str, object]", d["profile"])["links"])["x"] = 1
+    with pytest.raises(CardError, match=r"profile\.links"):
+        content.parse_card(d)
+
+
+def test_parse_rejects_extra_project_key():
+    """An extra key in a project dict raises CardError mentioning 'projects[0]'."""
+    d = copy.deepcopy(_VALID)
+    cast("list[dict[str, object]]", d["projects"])[0]["extra"] = "y"
+    with pytest.raises(CardError, match=r"projects\[0\]"):
+        content.parse_card(d)
+
+
+def test_parse_rejects_extra_resume_key():
+    """An extra key inside resume raises CardError mentioning 'resume'."""
+    d = copy.deepcopy(_VALID)
+    cast("dict[str, object]", d["resume"])["stray"] = "z"
+    with pytest.raises(CardError, match="resume"):
+        content.parse_card(d)
+
+
+# ---------------------------------------------------------------------------
+# Demos: valid paths
+# ---------------------------------------------------------------------------
+
+
+def test_parse_empty_demos():
+    """demos: [] is valid and produces card.demos == []."""
+    d = copy.deepcopy(_VALID)
+    d["demos"] = []
+    card = content.parse_card(d)
+    assert card.demos == []
+
+
+def test_parse_demos_single():
+    """One valid demo dict produces a Demo dataclass with sanitized fields."""
+    d = copy.deepcopy(_VALID)
+    d["demos"] = [
+        {"name": "My\x00Demo", "summary": "sum\x07mary", "min_version": "1.2.3"}
+    ]
+    card = content.parse_card(d)
+    assert len(card.demos) == 1
+    dm = card.demos[0]
+    assert isinstance(dm, Demo)
+    assert dm.name == "MyDemo"
+    assert dm.summary == "summary"
+    assert dm.min_version == "1.2.3"
+
+
+def test_parse_demos_multiple():
+    """Multiple demo dicts are all parsed and present in the list."""
+    d = copy.deepcopy(_VALID)
+    d["demos"] = [
+        {"name": "alpha", "summary": "first", "min_version": "0.1.0"},
+        {"name": "beta", "summary": "second", "min_version": "2.0.0"},
+    ]
+    card = content.parse_card(d)
+    assert len(card.demos) == 2
+    assert card.demos[0] == Demo(name="alpha", summary="first", min_version="0.1.0")
+    assert card.demos[1] == Demo(name="beta", summary="second", min_version="2.0.0")
+
+
+# ---------------------------------------------------------------------------
+# Demos: error paths
+# ---------------------------------------------------------------------------
+
+
+def test_parse_demos_not_a_list():
+    """demos is not a list → CardError mentioning 'demos'."""
+    d = copy.deepcopy(_VALID)
+    d["demos"] = "not-a-list"
+    with pytest.raises(CardError, match="demos"):
+        content.parse_card(d)
+
+
+def test_parse_demos_item_not_a_dict():
+    """A demo element that is not a dict → CardError mentioning 'demos[0]'."""
+    d = copy.deepcopy(_VALID)
+    d["demos"] = ["not-a-dict"]
+    with pytest.raises(CardError, match=r"demos\[0\]"):
+        content.parse_card(d)
+
+
+def test_parse_demos_missing_name():
+    """A demo missing 'name' → CardError mentioning 'demos[0].name'."""
+    d = copy.deepcopy(_VALID)
+    d["demos"] = [{"summary": "s", "min_version": "1.0.0"}]
+    with pytest.raises(CardError, match=r"demos\[0\]\.name"):
+        content.parse_card(d)
+
+
+def test_parse_demos_empty_name():
+    """A demo with empty 'name' string → CardError mentioning 'demos[0].name'."""
+    d = copy.deepcopy(_VALID)
+    d["demos"] = [{"name": "", "summary": "s", "min_version": "1.0.0"}]
+    with pytest.raises(CardError, match=r"demos\[0\]\.name"):
+        content.parse_card(d)
+
+
+def test_parse_demos_missing_summary():
+    """A demo missing 'summary' → CardError mentioning 'demos[0].summary'."""
+    d = copy.deepcopy(_VALID)
+    d["demos"] = [{"name": "n", "min_version": "1.0.0"}]
+    with pytest.raises(CardError, match=r"demos\[0\]\.summary"):
+        content.parse_card(d)
+
+
+def test_parse_demos_empty_summary():
+    """A demo with empty 'summary' string → CardError mentioning 'demos[0].summary'."""
+    d = copy.deepcopy(_VALID)
+    d["demos"] = [{"name": "n", "summary": "", "min_version": "1.0.0"}]
+    with pytest.raises(CardError, match=r"demos\[0\]\.summary"):
+        content.parse_card(d)
+
+
+def test_parse_demos_missing_min_version():
+    """A demo missing 'min_version' → CardError mentioning 'demos[0].min_version'."""
+    d = copy.deepcopy(_VALID)
+    d["demos"] = [{"name": "n", "summary": "s"}]
+    with pytest.raises(CardError, match=r"demos\[0\]\.min_version"):
+        content.parse_card(d)
+
+
+def test_parse_demos_empty_min_version():
+    """A demo with empty 'min_version' → CardError mentioning 'demos[0].min_version'."""
+    d = copy.deepcopy(_VALID)
+    d["demos"] = [{"name": "n", "summary": "s", "min_version": ""}]
+    with pytest.raises(CardError, match=r"demos\[0\]\.min_version"):
+        content.parse_card(d)
+
+
+def test_parse_demos_invalid_min_version():
+    """A demo with non-PEP-440 min_version → CardError on 'demos[0].min_version'."""
+    d = copy.deepcopy(_VALID)
+    d["demos"] = [{"name": "n", "summary": "s", "min_version": "not.a.version"}]
+    with pytest.raises(CardError, match=r"demos\[0\]\.min_version"):
+        content.parse_card(d)
+
+
+def test_parse_demos_extra_key():
+    """An unknown key in a demo dict → CardError mentioning 'demos[0]'."""
+    d = copy.deepcopy(_VALID)
+    d["demos"] = [{"name": "n", "summary": "s", "min_version": "1.0.0", "extra": "x"}]
+    with pytest.raises(CardError, match=r"demos\[0\]"):
+        content.parse_card(d)
+
+
+# ---------------------------------------------------------------------------
+# new_demos helper
+# ---------------------------------------------------------------------------
+
+
+def test_new_demos_equal_version_not_new():
+    """Demo whose min_version equals current is NOT included (strictly greater)."""
+    d = copy.deepcopy(_VALID)
+    d["demos"] = [{"name": "n", "summary": "s", "min_version": "1.0.0"}]
+    card = content.parse_card(d)
+    result = content.new_demos(card, current="1.0.0")
+    assert result == []
+
+
+def test_new_demos_lower_min_version_not_new():
+    """Demo whose min_version is lower than current is NOT included."""
+    d = copy.deepcopy(_VALID)
+    d["demos"] = [{"name": "n", "summary": "s", "min_version": "0.9.0"}]
+    card = content.parse_card(d)
+    result = content.new_demos(card, current="1.0.0")
+    assert result == []
+
+
+def test_new_demos_higher_min_version_is_new():
+    """Demo whose min_version is strictly greater than current IS included."""
+    d = copy.deepcopy(_VALID)
+    d["demos"] = [{"name": "n", "summary": "s", "min_version": "1.0.1"}]
+    card = content.parse_card(d)
+    result = content.new_demos(card, current="1.0.0")
+    assert len(result) == 1
+    assert result[0].name == "n"
+
+
+def test_new_demos_empty_demos():
+    """Card with no demos → new_demos returns []."""
+    d = copy.deepcopy(_VALID)
+    d["demos"] = []
+    card = content.parse_card(d)
+    assert content.new_demos(card, current="1.0.0") == []
+
+
+def test_new_demos_invalid_current_raises():
+    """new_demos with a non-PEP-440 current version raises CardError."""
+    d = copy.deepcopy(_VALID)
+    d["demos"] = []
+    card = content.parse_card(d)
+    with pytest.raises(CardError, match="invalid current version"):
+        content.new_demos(card, current="not-a-version")
+
+
+def test_new_demos_version_ordering():
+    """PEP 440 pre/rc/post ordering is respected correctly.
+
+    current = "1.0.0"
+    min_versions: "0.9", "1.0.0", "1.0.1", "1.0.0.post1", "2.0rc1"
+    Only "1.0.1", "1.0.0.post1", and "2.0rc1" are strictly greater.
+    """
+    d = copy.deepcopy(_VALID)
+    d["demos"] = [
+        {"name": "old", "summary": "s", "min_version": "0.9"},
+        {"name": "same", "summary": "s", "min_version": "1.0.0"},
+        {"name": "patch", "summary": "s", "min_version": "1.0.1"},
+        {"name": "post", "summary": "s", "min_version": "1.0.0.post1"},
+        {"name": "rc", "summary": "s", "min_version": "2.0rc1"},
+    ]
+    card = content.parse_card(d)
+    result = content.new_demos(card, current="1.0.0")
+    assert [dm.name for dm in result] == ["patch", "post", "rc"]

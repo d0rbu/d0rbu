@@ -23,7 +23,7 @@ _hyp_settings.load_profile("ci")
 # ---------------------------------------------------------------------------
 
 _VALID_CARD_DOC: dict = {
-    "schema_version": 1,
+    "schema_version": 2,
     "profile": {
         "name": "Henry Castillo",
         "handle": "d0rbu",
@@ -62,6 +62,7 @@ _VALID_CARD_DOC: dict = {
         "education": [{"degree": "BS", "school": "MIT", "period": "2020"}],
         "highlights": ["Published paper on SAE evaluation"],
     },
+    "demos": [],
 }
 
 # Verify the seed doc is schema-valid at import time so a typo here is caught early.
