@@ -23,6 +23,13 @@ repos:
     hooks:
       - id: conventional-pre-commit
         stages: [commit-msg]
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0.37.2
+    hooks:
+      - id: check-jsonschema
+        name: card.json matches card.schema.json
+        files: ^web/data/card\.json$
+        args: ["--schemafile", "src/henry_castillo/card.schema.json"]
   - repo: local
     hooks:
       - id: ruff
