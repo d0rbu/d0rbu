@@ -296,9 +296,7 @@ def run(
     if update_available and new_demos:
         demos_choice = _Choice("demos", f"Demos — {len(new_demos)} new", None)
     else:
-        demos_choice = _Choice(
-            "demos", "Demos (under construction)", disabled="under construction"
-        )
+        demos_choice = _Choice("demos", "Demos", disabled="under construction")
 
     choices: list[_Choice] = [
         _Choice("about", "About"),

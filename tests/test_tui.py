@@ -534,6 +534,20 @@ def test_demos_default_new_demos_omitted():
     assert demos_c.disabled is not None
 
 
+def test_demos_disabled_renders_no_duplicate_reason() -> None:
+    """Disabled demos renders exactly 'Demos (under construction)' — not doubled.
+
+    The _Choice label is 'Demos' and the disabled reason is 'under construction'.
+    _render_menu appends ' (under construction)', so the final text must be
+    'Demos (under construction)' once, not doubled.
+    """
+    demos_c = _Choice("demos", "Demos", disabled="under construction")
+    ft = _render_menu("msg", [demos_c], 0)
+    rendered = "".join(item[1] for item in ft)
+    assert "Demos (under construction)" in rendered
+    assert "(under construction) (under construction)" not in rendered
+
+
 # ---------------------------------------------------------------------------
 # Cursor persistence — default_index threading
 # ---------------------------------------------------------------------------
