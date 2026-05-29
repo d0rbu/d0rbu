@@ -697,7 +697,7 @@ def test_open_url_webbrowser_error_does_not_raise(monkeypatch, capsys):
     monkeypatch.setattr(_m.webbrowser, "open", _raise)
     _m._open_url("https://example.com/fallback")  # must not raise
     out = capsys.readouterr().out
-    assert "https://example.com/fallback" in out
+    assert out.strip() == "Couldn't open a browser; visit https://example.com/fallback"
 
 
 def test_resume_open_webbrowser_error_returns_zero(monkeypatch, capsys):
@@ -711,7 +711,8 @@ def test_resume_open_webbrowser_error_returns_zero(monkeypatch, capsys):
     rc = main(["resume", "--open"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "https://example.com/cv.pdf" in out
+    lines = [ln for ln in out.splitlines() if "visit" in ln]
+    assert lines == ["Couldn't open a browser; visit https://example.com/cv.pdf"]
 
 
 def test_blog_webbrowser_error_returns_zero(monkeypatch, capsys):
@@ -725,7 +726,10 @@ def test_blog_webbrowser_error_returns_zero(monkeypatch, capsys):
     rc = main(["blog"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "https://henrycastillo.substack.com" in out
+    lines = [ln for ln in out.splitlines() if "visit" in ln]
+    assert lines == [
+        "Couldn't open a browser; visit https://henrycastillo.substack.com"
+    ]
 
 
 def test_render_section_unknown_section_is_noop(monkeypatch):

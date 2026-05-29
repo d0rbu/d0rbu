@@ -223,7 +223,8 @@ def test_resume_pdf_shown_when_set():
     doc = {**_VALID_DOC, "resume": {**_RESUME_DOC, "pdf": "https://example.com/cv.pdf"}}
     card = parse_card(doc)
     out = _text(render.resume(card))
-    assert "https://example.com/cv.pdf" in out
+    lines = [ln.strip("│ \n") for ln in out.splitlines() if "PDF:" in ln]
+    assert lines == ["PDF: https://example.com/cv.pdf"]
 
 
 def test_resume_no_missing_data_fallback():
@@ -419,13 +420,21 @@ def test_content_with_bracket_markup_renders_literally():
         links=Links(github="https://g/[u]", blog=""),
     )
     assert "[bold]x[/bold] [link]" in _text(render.about(profile))
-    assert "https://g/[u]" in _text(render.contact(profile))
+    contact_text = _text(render.contact(profile))
+    contact_lines = [
+        ln.strip("│ \n") for ln in contact_text.splitlines() if "GitHub:" in ln
+    ]
+    assert contact_lines == ["GitHub:  https://g/[u]"]
 
 
 def test_project_blurb_with_brackets_renders_literally():
     proj = [Project("p", "blurb [b]z[/b]", "https://u/[v]", ["t1", "t2"])]
     out = _text(render.projects(proj))
-    assert "blurb [b]z[/b]" in out and "[t1, t2]" in out and "https://u/[v]" in out
+    assert "blurb [b]z[/b]" in out and "[t1, t2]" in out
+    url_lines = [ln for ln in out.splitlines() if "u/[v]" in ln]
+    assert url_lines
+    cells = [c.strip() for c in url_lines[0].split("│") if c.strip()]
+    assert cells == ["p", "blurb [b]z[/b] [t1, t2]", "https://u/[v]"]
 
 
 # ---------------------------------------------------------------------------

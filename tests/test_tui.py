@@ -374,7 +374,7 @@ def test_default_open_url_browser_error_does_not_raise(monkeypatch, capsys):
     monkeypatch.setattr(tui.webbrowser, "open", _boom)
     tui._default_open_url("https://example.com")  # must not raise
     out = capsys.readouterr().out
-    assert "https://example.com" in out
+    assert out.strip() == "Couldn't open a browser; visit https://example.com"
 
 
 def test_default_open_url_os_error_does_not_raise(monkeypatch, capsys):
@@ -386,7 +386,7 @@ def test_default_open_url_os_error_does_not_raise(monkeypatch, capsys):
     monkeypatch.setattr(tui.webbrowser, "open", _boom)
     tui._default_open_url("https://example.com")  # must not raise
     out = capsys.readouterr().out
-    assert "https://example.com" in out
+    assert out.strip() == "Couldn't open a browser; visit https://example.com"
 
 
 def test_run_blog_browser_error_loop_continues(monkeypatch):

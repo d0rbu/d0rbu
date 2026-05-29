@@ -121,7 +121,7 @@ def test_default_open_url_browser_error_does_not_raise(monkeypatch, capsys):
     monkeypatch.setattr(F.webbrowser, "open", _boom)
     F._default_open_url("https://example.com")  # must not raise
     out = capsys.readouterr().out
-    assert "https://example.com" in out
+    assert out.strip() == "Couldn't open a browser; visit https://example.com"
 
 
 def test_default_open_url_os_error_does_not_raise(monkeypatch, capsys):
@@ -133,7 +133,7 @@ def test_default_open_url_os_error_does_not_raise(monkeypatch, capsys):
     monkeypatch.setattr(F.webbrowser, "open", _boom)
     F._default_open_url("https://example.com")  # must not raise
     out = capsys.readouterr().out
-    assert "https://example.com" in out
+    assert out.strip() == "Couldn't open a browser; visit https://example.com"
 
 
 def test_show_no_data_timeout_browser_error_returns_0(monkeypatch, capsys):
@@ -154,7 +154,8 @@ def test_show_no_data_timeout_browser_error_returns_0(monkeypatch, capsys):
     )
     assert rc == 0
     out = capsys.readouterr().out
-    assert "https://example.com" in out
+    lines = [ln for ln in out.splitlines() if "visit" in ln]
+    assert lines == ["Couldn't open a browser; visit https://example.com"]
 
 
 def test_default_wait_for_keypress_timeout_false():
