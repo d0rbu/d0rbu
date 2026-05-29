@@ -16,6 +16,7 @@ import pytest
 
 import henry_castillo
 from henry_castillo import update
+from henry_castillo.__main__ import main as _main
 
 # ---------------------------------------------------------------------------
 # is_outdated — PEP 440 matrix
@@ -806,3 +807,164 @@ def test_cache_path_absolute_xdg_used_verbatim(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     p = update.cache_path()
     assert p == tmp_path / "henry-castillo" / "update-check.json"
+
+
+# ---------------------------------------------------------------------------
+# NEW: corrupt-cache hardening — BUG 1 (non-numeric last_check) and
+# BUG 2 (non-string cached latest). Tests written FIRST (TDD); they must
+# fail before the fixes are applied and pass after.
+# ---------------------------------------------------------------------------
+
+
+def test_check_for_update_string_last_check_does_not_raise(tmp_path: Path, monkeypatch):
+    """BUG 1 regression: last_check='xxx' must not crash with TypeError.
+
+    Before the fix, ``now - last`` where last is a str raises
+    ``TypeError: unsupported operand type(s) for -: 'float' and 'str'``.
+    After the fix the bad value is coerced to 0 (stale) -> fetcher runs.
+    """
+    monkeypatch.setattr(update, "current_version", lambda: "9.9.9")
+    cache = tmp_path / "u.json"
+    cache.write_text('{"last_check": "xxx", "latest": "9.9.9"}')
+    # Must return None (not raise), even if fetcher finds nothing new.
+    got = update.check_for_update(
+        now=1000.0, cache_path=cache, interval=100, fetcher=lambda: None
+    )
+    assert got is None
+
+
+@pytest.mark.parametrize(
+    "bad_last",
+    [
+        None,  # JSON null -> not int/float -> coerce to 0
+        [1],  # list -> coerce to 0
+        True,  # bool subclass of int, but excluded -> coerce to 0
+    ],
+)
+def test_check_for_update_non_numeric_last_check_types_do_not_raise(
+    bad_last, tmp_path: Path, monkeypatch
+):
+    """BUG 1 regression (parametrized): null, list, and bool last_check must not crash.
+
+    True is an int subclass so ``isinstance(True, (int, float))`` would be True
+    without the bool exclusion — the fix must explicitly reject bool.
+    """
+    monkeypatch.setattr(update, "current_version", lambda: "9.9.9")
+    cache = tmp_path / "u.json"
+    cache.write_text(json.dumps({"last_check": bad_last, "latest": "1.0.0"}))
+    # Must not raise; coerced last == 0 -> stale -> fetcher runs.
+    got = update.check_for_update(
+        now=1000.0, cache_path=cache, interval=100, fetcher=lambda: None
+    )
+    assert got is None  # current == "9.9.9", fetcher returns None, so None
+
+
+def test_check_for_update_throttled_non_string_latest_does_not_raise(
+    tmp_path: Path, monkeypatch
+):
+    """BUG 2 regression: a throttled cache with latest=123 (int) must not crash.
+
+    Before the fix, ``is_outdated(current, 123)`` raises TypeError because
+    ``Version(123)`` (packaging) raises TypeError, not InvalidVersion, and the
+    except only caught InvalidVersion.  After the fix the non-string latest is
+    coerced to None in check_for_update, so is_outdated is never called with it.
+    """
+    monkeypatch.setattr(update, "current_version", lambda: "0.0.0")
+    now = 1_000_000.0
+    cache = tmp_path / "u.json"
+    # Throttled: last_check == now so now - last == 0 < interval → skip fetch.
+    cache.write_text('{"last_check": 1000000.0, "latest": 123}')
+    got = update.check_for_update(
+        now=now, cache_path=cache, interval=100, fetcher=lambda: None
+    )
+    assert got is None
+
+
+@pytest.mark.parametrize("bad_latest", [[1], True])
+def test_check_for_update_throttled_list_and_bool_latest_do_not_raise(
+    bad_latest, tmp_path: Path, monkeypatch
+):
+    """BUG 2 regression (parametrized): throttled list/bool latest must not crash."""
+    monkeypatch.setattr(update, "current_version", lambda: "0.0.0")
+    now = 1_000_000.0
+    cache = tmp_path / "u.json"
+    cache.write_text(json.dumps({"last_check": now, "latest": bad_latest}))
+    got = update.check_for_update(
+        now=now, cache_path=cache, interval=100, fetcher=lambda: None
+    )
+    assert got is None
+
+
+def test_is_outdated_non_string_latest_int_returns_false():
+    """Defense-in-depth: is_outdated with int latest must return False, not crash."""
+    assert update.is_outdated("0.0.0", 123) is False  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+
+
+def test_is_outdated_non_string_latest_list_returns_false():
+    """Defense-in-depth: is_outdated with list latest must return False, not crash."""
+    assert update.is_outdated("0.0.0", ["x"]) is False  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+
+
+# Happy-path regression: well-typed caches must still work exactly as before.
+
+
+def test_check_for_update_valid_cache_still_throttles_and_returns_latest(
+    tmp_path: Path, monkeypatch
+):
+    """Well-typed throttled cache: coercion must not disturb the happy path."""
+    monkeypatch.setattr(update, "current_version", lambda: "0.0.0")
+    now = 1_000_000.0
+    cache = tmp_path / "u.json"
+    cache.write_text('{"last_check": 1000000.0, "latest": "9.9.9"}')
+    calls: list[int] = []
+    got = update.check_for_update(
+        now=now,
+        cache_path=cache,
+        interval=100,
+        fetcher=lambda: calls.append(1) or "5.5.5",
+    )
+    # Throttled → no fetch, still returns cached latest.
+    assert calls == []
+    assert got == "9.9.9"
+
+
+def test_check_for_update_valid_stale_cache_still_fetches(tmp_path: Path, monkeypatch):
+    """Well-typed stale cache: fetch is triggered and result returned."""
+    monkeypatch.setattr(update, "current_version", lambda: "0.0.0")
+    cache = tmp_path / "u.json"
+    cache.write_text('{"last_check": 0.0, "latest": "1.0.0"}')
+    calls: list[int] = []
+
+    def fetcher():
+        calls.append(1)
+        return "9.9.9"
+
+    got = update.check_for_update(
+        now=1000.0, cache_path=cache, interval=100, fetcher=fetcher
+    )
+    assert calls == [1]
+    assert got == "9.9.9"
+
+
+# End-to-end: tampered on-disk cache must not crash main(["--check-update"]).
+
+
+def test_main_check_update_with_tampered_cache_returns_zero(
+    tmp_path: Path, monkeypatch
+):
+    """End-to-end BUG 1 + BUG 2: main(["--check-update"]) with a tampered cache.
+
+    Sets XDG_CACHE_HOME to tmp_path, writes a corrupt cache
+    ``{"last_check":"xxx","latest":"9.9.9"}`` (triggers BUG 1), and asserts
+    that main returns 0 and does NOT raise.
+    """
+    cache_dir = tmp_path / "henry-castillo"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "update-check.json").write_text(
+        json.dumps({"last_check": "xxx", "latest": "9.9.9"})
+    )
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    # Stub the fetcher so no real network call is made.
+    monkeypatch.setattr(update, "fetch_latest_version", lambda **k: None)
+    rc = _main(["--check-update"])
+    assert rc == 0

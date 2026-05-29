@@ -72,7 +72,7 @@ def is_outdated(current: str, latest: str) -> bool:
     """True if `latest` is a strictly newer version than `current`."""
     try:
         return Version(latest) > Version(current)
-    except InvalidVersion:
+    except (InvalidVersion, TypeError):
         return False
 
 
@@ -107,8 +107,12 @@ def check_for_update(
     now = time.time() if now is None else now
     path = cache_path if cache_path is not None else globals()["cache_path"]()
     cache = _read_cache(path)
-    latest = cache.get("latest")
     last = cache.get("last_check", 0)
+    if not isinstance(last, (int, float)) or isinstance(last, bool):
+        last = 0
+    latest = cache.get("latest")
+    if not isinstance(latest, str):
+        latest = None
     if now - last >= interval:
         fetched = fetcher()
         if fetched is not None:
