@@ -688,6 +688,46 @@ def test_open_url_calls_webbrowser(monkeypatch):
     assert calls == ["https://example.com"]
 
 
+def test_open_url_webbrowser_error_does_not_raise(monkeypatch, capsys):
+    """_open_url swallows webbrowser.Error and prints a fallback notice."""
+
+    def _raise(u):
+        raise _m.webbrowser.Error("no browser")
+
+    monkeypatch.setattr(_m.webbrowser, "open", _raise)
+    _m._open_url("https://example.com/fallback")  # must not raise
+    out = capsys.readouterr().out
+    assert "https://example.com/fallback" in out
+
+
+def test_resume_open_webbrowser_error_returns_zero(monkeypatch, capsys):
+    """resume --open still returns 0 when webbrowser.open raises webbrowser.Error."""
+    monkeypatch.setattr(_m.content, "load_card", lambda **k: _VALID_CARD)
+
+    def _raise(u):
+        raise _m.webbrowser.Error("broken browser")
+
+    monkeypatch.setattr(_m.webbrowser, "open", _raise)
+    rc = main(["resume", "--open"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "https://example.com/cv.pdf" in out
+
+
+def test_blog_webbrowser_error_returns_zero(monkeypatch, capsys):
+    """blog still returns 0 when webbrowser.open raises webbrowser.Error."""
+    monkeypatch.setattr(_m.content, "load_card", lambda **k: _VALID_CARD)
+
+    def _raise(u):
+        raise _m.webbrowser.Error("broken browser")
+
+    monkeypatch.setattr(_m.webbrowser, "open", _raise)
+    rc = main(["blog"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "https://henrycastillo.substack.com" in out
+
+
 def test_render_section_unknown_section_is_noop(monkeypatch):
     """Cover the fallthrough branch in _render_section for unrecognized section."""
     buf = io.StringIO()

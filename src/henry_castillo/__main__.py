@@ -44,7 +44,11 @@ def _harden_stream(stream: object) -> None:
 
 
 def _open_url(url: str) -> None:
-    webbrowser.open(url)
+    try:
+        webbrowser.open(url)
+    except (webbrowser.Error, OSError) as exc:
+        _log.logger.warning("browser launch failed: {}", exc)
+        print(f"Couldn't open a browser; visit {url}")
 
 
 def _build_parser() -> argparse.ArgumentParser:
