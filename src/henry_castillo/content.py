@@ -355,7 +355,10 @@ def _default_fetch(url: str) -> bytes:
         raise OSError(f"refusing non-HTTP(S) URL: {url!r}")
     request = urllib.request.Request(url, headers={"User-Agent": "henry-castillo"})  # noqa: S310
     with urllib.request.urlopen(request, timeout=_TIMEOUT) as resp:  # noqa: S310
-        return resp.read(_MAX_BYTES)
+        body = resp.read(_MAX_BYTES + 1)
+        if len(body) > _MAX_BYTES:
+            raise OSError("card.json exceeds the size cap")
+        return body
 
 
 def _write_cache(raw: bytes) -> None:

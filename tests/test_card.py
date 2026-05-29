@@ -443,22 +443,59 @@ def test_default_fetch_rejects_non_http():
         content._default_fetch("file:///etc/passwd")
 
 
-def test_default_fetch_body_cap(tmp_path, real_network):
-    big = b"x" * (300 * 1024)
+def test_default_fetch_rejects_oversize_body(tmp_path, real_network):
+    """A body > _MAX_BYTES must be REJECTED with OSError, not silently truncated."""
+    # Serve a body that is _MAX_BYTES + 1 byte (smallest over-cap body)
+    over_cap = b"x" * (content._MAX_BYTES + 1)
     d = tmp_path / "srv2"
     d.mkdir()
-    (d / "big.bin").write_bytes(big)
+    (d / "big.bin").write_bytes(over_cap)
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(d))
     with socketserver.TCPServer(("127.0.0.1", 0), handler) as srv:
         port = srv.server_address[1]
         t = threading.Thread(target=srv.serve_forever, daemon=True)
         t.start()
         try:
-            out = content._default_fetch(f"http://127.0.0.1:{port}/big.bin")
-            assert len(out) <= content._MAX_BYTES
+            with pytest.raises(OSError, match="size cap"):
+                content._default_fetch(f"http://127.0.0.1:{port}/big.bin")
         finally:
             srv.shutdown()
             t.join()
+
+
+def test_default_fetch_accepts_at_cap_body(tmp_path, real_network):
+    """A body of exactly _MAX_BYTES must be accepted and returned in full."""
+    at_cap = b"y" * content._MAX_BYTES
+    d = tmp_path / "srv3"
+    d.mkdir()
+    (d / "exact.bin").write_bytes(at_cap)
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(d))
+    with socketserver.TCPServer(("127.0.0.1", 0), handler) as srv:
+        port = srv.server_address[1]
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        try:
+            out = content._default_fetch(f"http://127.0.0.1:{port}/exact.bin")
+            assert len(out) == content._MAX_BYTES
+        finally:
+            srv.shutdown()
+            t.join()
+
+
+def test_load_card_oversize_body_falls_back_to_cache(tmp_path, monkeypatch):
+    """When _default_fetch raises OSError for an oversize body, load_card
+    falls back gracefully to the on-disk cache (no crash, no CardError when
+    cache is valid).
+    """
+    cp = tmp_path / "c.json"
+    cp.write_bytes(_doc_bytes())
+    monkeypatch.setattr(content, "_cache_path", lambda: cp)
+
+    def oversize_fetch(_u: str) -> bytes:
+        raise OSError("card.json exceeds the size cap")
+
+    got = content.load_card(fetch=oversize_fetch)
+    assert isinstance(got, content.Card)
 
 
 # ---------------------------------------------------------------------------
