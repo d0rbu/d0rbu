@@ -147,13 +147,48 @@ def test_sanitize_residue_note():
     assert content._sanitize("plain") == "plain"
 
 
+# ---------------------------------------------------------------------------
+# Targeted tests: bidi/format, surrogates, private-use, and allow-list chars
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "char,label",
+    [
+        ("\u202e", "RLO"),  # RIGHT-TO-LEFT OVERRIDE — Cf — terminal spoofing
+        ("\u200b", "ZWSP"),  # ZERO WIDTH SPACE — Cf
+        ("\ufeff", "BOM/ZWNBSP"),  # ZERO WIDTH NO-BREAK SPACE / BOM — Cf
+        ("\ud800", "lone-surrogate"),  # lone surrogate — Cs — strict-codec crash
+        ("\ue000", "PUA"),  # private-use char U+E000 — Co
+    ],
+)
+def test_sanitize_strips_forbidden_chars(char, label):
+    """Bidi/format (Cf), lone surrogates (Cs), and private-use (Co) are stripped."""
+    assert content._sanitize(char) == "", f"{label} should be stripped"
+    assert content._sanitize(f"before{char}after") == "beforeafter"
+
+
+@pytest.mark.parametrize("keep", ["\n", "\t"])
+def test_sanitize_preserves_allowed_cc_chars(keep):
+    """\n and \t (which ARE Cc) must survive the allow-list."""
+    assert content._sanitize(keep) == keep
+    assert content._sanitize(f"a{keep}b") == f"a{keep}b"
+
+
+def test_sanitize_preserves_ordinary_text():
+    """Plain ASCII and common Unicode are untouched."""
+    assert content._sanitize("Hello, world! 日本語 café") == "Hello, world! 日本語 café"
+
+
 @pytest.mark.parametrize("cp", list(range(0x00, 0x100)))
 def test_sanitize_exhaustive_latin1(cp):
     ch = chr(cp)
     out = content._sanitize(ch)
     if ch in "\n\t":
         assert out == ch
-    elif unicodedata.category(ch) == "Cc":
+    elif unicodedata.category(ch) in {"Cc", "Cf", "Cs", "Co"}:
+        # Widened predicate: Cc/Cf/Cs/Co are all stripped (U+00AD Soft Hyphen
+        # is Cf and is now stripped too — previously it survived as non-Cc).
         assert out == ""
     else:
         assert out == ch

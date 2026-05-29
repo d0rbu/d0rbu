@@ -111,8 +111,15 @@ def _validate_schema(doc: object) -> None:
         ) from exc
 
 
+_FORBIDDEN_CATEGORIES = {"Cc", "Cf", "Cs", "Co"}
+
+
 def _sanitize(value: str) -> str:
-    return "".join(c for c in value if c in "\n\t" or unicodedata.category(c) != "Cc")
+    return "".join(
+        c
+        for c in value
+        if c in "\n\t" or unicodedata.category(c) not in _FORBIDDEN_CATEGORIES
+    )
 
 
 def _sanitize_json(obj: object, _depth: int = 0) -> object:

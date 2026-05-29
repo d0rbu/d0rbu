@@ -34,8 +34,17 @@ _version_str = st.builds(
 )
 
 
+_FORBIDDEN_CATEGORIES = {"Cc", "Cf", "Cs", "Co"}
+
+
 def _has_cc(s: str) -> bool:
-    return any(c not in "\n\t" and unicodedata.category(c) == "Cc" for c in s)
+    """Return True if any forbidden-category char (Cc/Cf/Cs/Co) survives in s.
+
+    \n and \t are explicitly allow-listed (they are Cc but must be kept).
+    """
+    return any(
+        c not in "\n\t" and unicodedata.category(c) in _FORBIDDEN_CATEGORIES for c in s
+    )
 
 
 # A strategy that builds a SCHEMA-VALID card document (all required keys

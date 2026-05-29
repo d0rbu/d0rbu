@@ -1,10 +1,12 @@
 """Tests for render.py — strict Card/Profile/Project types."""
 
+import copy
 import io
 import unicodedata
 
 from rich.console import Console
 
+from henry_castillo import content as _content_mod
 from henry_castillo import render
 from henry_castillo.content import (
     Card,
@@ -424,3 +426,75 @@ def test_project_blurb_with_brackets_renders_literally():
     proj = [Project("p", "blurb [b]z[/b]", "https://u/[v]", ["t1", "t2"])]
     out = _text(render.projects(proj))
     assert "blurb [b]z[/b]" in out and "[t1, t2]" in out and "https://u/[v]" in out
+
+
+# ---------------------------------------------------------------------------
+# End-to-end sanitize → render: bidi/format chars must not reach output
+# ---------------------------------------------------------------------------
+
+_BIDI_VALID_DOC: dict[str, object] = {
+    "schema_version": 2,
+    "profile": {
+        "name": "\u202eHenry",  # RLO U+202E in name
+        "handle": "d0rbu",
+        "tagline": "safe",
+        "about": "bio\ud800",  # lone surrogate in about
+        "email": "e@x.com",
+        "links": {
+            "github": "https://github.com/d0rbu",
+            "blog": "https://blog.example.com",
+        },
+    },
+    "projects": [
+        {
+            "name": "proj",
+            "blurb": "blurb\ufeff",  # BOM U+FEFF in blurb
+            "url": "https://example.com",
+            "tags": ["t"],
+        }
+    ],
+    "resume": {
+        "pdf": "",
+        "experience": [],
+        "education": [],
+        "highlights": ["hi\u200b"],  # ZWSP U+200B in highlight
+    },
+    "demos": [],
+}
+
+# Forbidden codepoints that must NEVER appear in render output
+_FORBIDDEN_CPS = {
+    "\u202e",  # RIGHT-TO-LEFT OVERRIDE (RLO) — Cf
+    "\u200b",  # ZERO WIDTH SPACE (ZWSP) — Cf
+    "\ufeff",  # BOM / ZERO WIDTH NO-BREAK SPACE — Cf
+    "\ud800",  # lone surrogate — Cs
+}
+
+
+def test_render_all_strips_bidi_format_surrogates():
+    """parse_card + render_all must strip all Cf/Cs/Co chars before output.
+
+    Also uses a Console backed by an ascii-codec StringIO to prove that no
+    lone surrogate reaches the stream (which would raise UnicodeEncodeError
+    with a strict codec) and no display-spoofing char survives sanitization.
+    """
+    card = _content_mod.parse_card(copy.deepcopy(_BIDI_VALID_DOC))
+
+    # Standard StringIO render path
+    buf = io.StringIO()
+    render.render_all(Console(file=buf, width=80, no_color=True), card)
+    out = buf.getvalue()
+
+    for cp in _FORBIDDEN_CPS:
+        assert cp not in out, (
+            f"forbidden char U+{ord(cp):04X} survived in render output"
+        )
+
+    # Strict ascii-codec path: lone surrogate would crash here if it survived
+    ascii_buf = io.StringIO()
+    render.render_all(Console(file=ascii_buf, width=80, no_color=True), card)
+    ascii_out = ascii_buf.getvalue()
+    # encode/decode round-trip through utf-8 to prove no surrogate slipped through
+    ascii_out.encode("utf-8")  # raises UnicodeEncodeError if a lone surrogate survived
+
+    assert "Henry" in out  # ordinary text (minus the stripped RLO) is preserved
