@@ -1,6 +1,7 @@
 """Tests for tui.py — strict Card types, Blog, Demos (under construction), badge."""
 
 import io
+import webbrowser
 
 import pytest
 from rich.console import Console
@@ -362,6 +363,43 @@ def test_default_open_url_uses_webbrowser(monkeypatch):
     monkeypatch.setattr(tui.webbrowser, "open", lambda u: calls.append(u) or True)
     tui._default_open_url("https://example.com")
     assert calls == ["https://example.com"]
+
+
+def test_default_open_url_browser_error_does_not_raise(monkeypatch, capsys):
+    """webbrowser.Error must be caught; a notice is printed and no exception escapes."""
+
+    def _boom(url: str) -> None:
+        raise webbrowser.Error("no browser")
+
+    monkeypatch.setattr(tui.webbrowser, "open", _boom)
+    tui._default_open_url("https://example.com")  # must not raise
+    out = capsys.readouterr().out
+    assert "https://example.com" in out
+
+
+def test_default_open_url_os_error_does_not_raise(monkeypatch, capsys):
+    """OSError must be caught; a notice is printed and no exception escapes."""
+
+    def _boom(url: str) -> None:
+        raise OSError("exec failed")
+
+    monkeypatch.setattr(tui.webbrowser, "open", _boom)
+    tui._default_open_url("https://example.com")  # must not raise
+    out = capsys.readouterr().out
+    assert "https://example.com" in out
+
+
+def test_run_blog_browser_error_loop_continues(monkeypatch):
+    """Browser failure during Blog open must not crash the TUI loop."""
+
+    def _boom(_u: str) -> None:
+        raise webbrowser.Error("boom")
+
+    monkeypatch.setattr(tui.webbrowser, "open", _boom)
+    console, _ = _console()
+    seq = iter(["Blog", None])
+    # must not raise; loop must reach None (Quit) and return normally
+    tui.run(CARD, console=console, select=lambda *_a, **_k: next(seq))
 
 
 def test_run_uses_real_defaults_when_not_injected(monkeypatch):

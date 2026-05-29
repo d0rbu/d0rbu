@@ -14,7 +14,7 @@ import questionary
 from rich.console import Console
 from rich.text import Text
 
-from henry_castillo import render
+from henry_castillo import _log, render
 from henry_castillo.content import Card, Demo
 
 _MENU = [name for name, _ in render.SECTIONS]
@@ -34,7 +34,11 @@ def _default_select(message: str, choices: list[str]) -> str | None:
 
 
 def _default_open_url(url: str) -> None:
-    webbrowser.open(url)
+    try:
+        webbrowser.open(url)
+    except (webbrowser.Error, OSError) as exc:
+        _log.logger.warning("browser launch failed: {}", exc)
+        print(f"Couldn't open a browser; visit {url}")
 
 
 def run(

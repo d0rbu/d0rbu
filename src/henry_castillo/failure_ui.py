@@ -13,6 +13,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from henry_castillo import _log
+
 _COUNTDOWN = 5
 _GUIDANCE = (
     "Try: uvx --refresh henry-castillo  (or update the package).\n"
@@ -38,7 +40,11 @@ def _default_wait_for_keypress(timeout: float, *, stream_fd: int | None = None) 
 
 
 def _default_open_url(url: str) -> None:
-    webbrowser.open(url)
+    try:
+        webbrowser.open(url)
+    except (webbrowser.Error, OSError) as exc:
+        _log.logger.warning("browser launch failed: {}", exc)
+        print(f"Couldn't open a browser; visit {url}")
 
 
 def show_no_data(

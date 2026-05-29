@@ -3,6 +3,7 @@ import os
 import select as _select
 import termios
 import time
+import webbrowser
 
 import pytest
 from rich.console import Console
@@ -109,6 +110,51 @@ def test_default_open_url_uses_webbrowser(monkeypatch):
     monkeypatch.setattr(F.webbrowser, "open", lambda u: calls.append(u) or True)
     F._default_open_url("https://example.com")
     assert calls == ["https://example.com"]
+
+
+def test_default_open_url_browser_error_does_not_raise(monkeypatch, capsys):
+    """webbrowser.Error must be caught; a notice is printed and no exception escapes."""
+
+    def _boom(url: str) -> None:
+        raise webbrowser.Error("no browser")
+
+    monkeypatch.setattr(F.webbrowser, "open", _boom)
+    F._default_open_url("https://example.com")  # must not raise
+    out = capsys.readouterr().out
+    assert "https://example.com" in out
+
+
+def test_default_open_url_os_error_does_not_raise(monkeypatch, capsys):
+    """OSError must be caught; a notice is printed and no exception escapes."""
+
+    def _boom(url: str) -> None:
+        raise OSError("exec failed")
+
+    monkeypatch.setattr(F.webbrowser, "open", _boom)
+    F._default_open_url("https://example.com")  # must not raise
+    out = capsys.readouterr().out
+    assert "https://example.com" in out
+
+
+def test_show_no_data_timeout_browser_error_returns_0(monkeypatch, capsys):
+    """Countdown timeout + browser failure must still return rc=0, no raise."""
+    monkeypatch.setattr(
+        F.webbrowser,
+        "open",
+        lambda _u: (_ for _ in ()).throw(webbrowser.Error("boom")),
+    )
+    console, _ = _con()
+    rc = F.show_no_data(
+        "msg",
+        url="https://example.com",
+        is_tty=True,
+        console=console,
+        wait_for_keypress=lambda _t: False,
+        sleep=lambda _s: None,
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "https://example.com" in out
 
 
 def test_default_wait_for_keypress_timeout_false():
