@@ -204,3 +204,51 @@ def test_show_no_data_uses_real_defaults_path(monkeypatch):
     monkeypatch.setattr(F, "_default_wait_for_keypress", lambda _t: True)
     rc = F.show_no_data("m", url="U", is_tty=True, console=console)
     assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# Item 5: _default_wait_for_keypress with stream_fd=None (production default)
+# ---------------------------------------------------------------------------
+
+
+def test_default_wait_for_keypress_none_arm_timeout(monkeypatch):
+    """stream_fd=None → uses sys.stdin.fileno(); timeout branch returns False."""
+    primary, secondary = os.openpty()
+    try:
+        saved = termios.tcgetattr(secondary)
+
+        # Make sys.stdin.fileno() return the pty secondary fd
+        class _FakeFd:
+            def fileno(self):
+                return secondary
+
+        monkeypatch.setattr("sys.stdin", _FakeFd())
+        # No stream_fd argument → exercises the `sys.stdin.fileno()` branch
+        result = F._default_wait_for_keypress(0.05)
+        assert result is False
+        # Terminal attrs must be restored
+        assert termios.tcgetattr(secondary) == saved, "terminal attrs not restored"
+    finally:
+        os.close(primary)
+        os.close(secondary)
+
+
+def test_default_wait_for_keypress_none_arm_keypress(monkeypatch):
+    """stream_fd=None → uses sys.stdin.fileno(); keypress returns True."""
+    primary, secondary = os.openpty()
+    try:
+        saved = termios.tcgetattr(secondary)
+
+        class _FakeFd:
+            def fileno(self):
+                return secondary
+
+        monkeypatch.setattr("sys.stdin", _FakeFd())
+        os.write(primary, b"x")
+        time.sleep(0.02)  # let the byte reach the pty buffer
+        result = F._default_wait_for_keypress(1.0)
+        assert result is True
+        assert termios.tcgetattr(secondary) == saved, "terminal attrs not restored"
+    finally:
+        os.close(primary)
+        os.close(secondary)

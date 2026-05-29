@@ -498,3 +498,44 @@ def test_render_all_strips_bidi_format_surrogates():
     ascii_out.encode("utf-8")  # raises UnicodeEncodeError if a lone surrogate survived
 
     assert "Henry" in out  # ordinary text (minus the stripped RLO) is preserved
+
+
+# ---------------------------------------------------------------------------
+# Item 4: render em-dash empty-field drop
+# ---------------------------------------------------------------------------
+
+
+def test_resume_experience_empty_org_no_doubled_emdash():
+    """experience row with empty org: output shows 'R — 2024', not 'R —  — 2024'."""
+    doc = {
+        **_VALID_DOC,
+        "resume": {
+            "pdf": "",
+            "experience": [{"role": "R", "org": "", "period": "2024"}],
+            "education": [],
+            "highlights": [],
+        },
+    }
+    card = parse_card(doc)
+    out = _text(render.resume(card))
+    # Empty org is filtered; exactly one em-dash joining role to period
+    assert "R — 2024" in out
+    assert "—  —" not in out
+
+
+def test_resume_education_empty_degree_and_period_no_stray_emdash():
+    """education row with empty degree/period: lone school, no em-dashes."""
+    doc = {
+        **_VALID_DOC,
+        "resume": {
+            "pdf": "",
+            "experience": [],
+            "education": [{"degree": "", "school": "MIT", "period": ""}],
+            "highlights": [],
+        },
+    }
+    card = parse_card(doc)
+    out = _text(render.resume(card))
+    assert "MIT" in out
+    # No em-dash at all (only non-empty field is school)
+    assert "—" not in out

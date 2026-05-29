@@ -37,6 +37,33 @@ def test_debug_enabled_cli_flag_wins():
     assert _log.debug_enabled(cli_flag=True) is True
 
 
+def test_cli_flag_overrides_falsey_env(monkeypatch):
+    """cli_flag=True wins even when HENRY_CASTILLO_DEBUG is a falsey value like '0'."""
+    monkeypatch.setenv("HENRY_CASTILLO_DEBUG", "0")
+    assert _log.debug_enabled(cli_flag=True) is True
+
+
+def test_debug_enabled_strip_lower_normalization(monkeypatch):
+    """debug_enabled strips whitespace and lower-cases the env value before lookup."""
+    # Leading/trailing spaces, mixed case — all treated as falsey when value is 'off'
+    monkeypatch.setenv("HENRY_CASTILLO_DEBUG", "  OFF  ")
+    assert _log.debug_enabled(cli_flag=False) is False
+
+    # Whitespace-only string strips to "" which is in _FALSEY
+    monkeypatch.setenv("HENRY_CASTILLO_DEBUG", "   ")
+    assert _log.debug_enabled(cli_flag=False) is False
+
+    # Truthy values with mixed case / spaces
+    monkeypatch.setenv("HENRY_CASTILLO_DEBUG", "TRUE")
+    assert _log.debug_enabled(cli_flag=False) is True
+
+    monkeypatch.setenv("HENRY_CASTILLO_DEBUG", "  TrUe  ")
+    assert _log.debug_enabled(cli_flag=False) is True
+
+    monkeypatch.setenv("HENRY_CASTILLO_DEBUG", "FALSE")
+    assert _log.debug_enabled(cli_flag=False) is False
+
+
 def test_debug_enabled_env(monkeypatch):
     monkeypatch.delenv("HENRY_CASTILLO_DEBUG", raising=False)
     assert _log.debug_enabled(cli_flag=False) is False

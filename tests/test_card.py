@@ -4,6 +4,7 @@ import errno
 import functools
 import http.client
 import http.server
+import importlib.resources as _ir
 import json as _json
 import os as _os_mod
 import pathlib
@@ -1083,3 +1084,76 @@ def test_validate_schema_root_path_label():
         content._validate_schema("not-an-object")
     # The error path should say '(root)' since absolute_path is empty.
     assert "(root)" in str(ei.value)
+
+
+# ---------------------------------------------------------------------------
+# Item 1: bad-UTF-8 decode leg (_parse_bytes raises, load_card falls back)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_bytes_bad_utf8_raises_value_error():
+    """b'\\xff\\xfe...' causes utf-8 decode to raise UnicodeDecodeError (a ValueError).
+
+    _parse_bytes must propagate as a ValueError so load_card's except clause
+    catches it and falls through to the cache / final CardError.
+    """
+    invalid_utf8 = b"\xff\xfe" + b"garbage"
+    with pytest.raises(ValueError):
+        content._parse_bytes(invalid_utf8)
+
+
+def test_load_card_bad_utf8_fetch_no_cache_raises_carderror(tmp_path, monkeypatch):
+    """Bad-UTF-8 fetch body with no cache → load_card raises CardError."""
+    monkeypatch.setattr(content, "_cache_path", lambda: tmp_path / "nope.json")
+    with pytest.raises(content.CardError):
+        content.load_card(fetch=lambda _u: b"\xff\xfe garbage bytes")
+
+
+def test_load_card_bad_utf8_fetch_valid_cache_returns_card(tmp_path, monkeypatch):
+    """Bad-UTF-8 fetch body with a valid cache → falls back to the cached Card."""
+    cp = tmp_path / "c.json"
+    cp.write_bytes(_doc_bytes())
+    monkeypatch.setattr(content, "_cache_path", lambda: cp)
+    got = content.load_card(fetch=lambda _u: b"\xff\xfe garbage bytes")
+    assert isinstance(got, content.Card)
+
+
+# ---------------------------------------------------------------------------
+# Item 2: missing/broken bundled schema leg (_schema → FileNotFoundError)
+# ---------------------------------------------------------------------------
+
+
+def test_load_card_missing_schema_resource_raises_carderror(tmp_path, monkeypatch):
+    """If importlib.resources cannot read card.schema.json, load_card raises CardError.
+
+    We clear the lru_caches, monkeypatch the joinpath read to raise
+    FileNotFoundError, then verify that load_card wraps this as CardError
+    (not a raw OSError).  Caches are cleared in teardown to avoid test pollution.
+    """
+    content._schema.cache_clear()
+    content._validator.cache_clear()
+
+    real_files = _ir.files
+
+    class _BadPath:
+        def joinpath(self, *_args):
+            return self
+
+        def read_text(self, **_kw):
+            raise FileNotFoundError("card.schema.json not found")
+
+    def _bad_files(pkg):
+        return _BadPath()
+
+    monkeypatch.setattr(_ir, "files", _bad_files)
+    monkeypatch.setattr(content, "_cache_path", lambda: tmp_path / "nope.json")
+    try:
+        with pytest.raises(content.CardError):
+            content.load_card(fetch=lambda _u: _doc_bytes())
+    finally:
+        # Restore: undo monkeypatch side-effects on the lru_cache so other tests
+        # get the real schema again (monkeypatch teardown restores _ir.files; we
+        # just need to clear the caches so a fresh load happens next time).
+        monkeypatch.setattr(_ir, "files", real_files)
+        content._schema.cache_clear()
+        content._validator.cache_clear()

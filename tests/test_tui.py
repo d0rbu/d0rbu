@@ -488,3 +488,27 @@ def test_demos_badge_markup_safe():
     # The raw markup brackets must appear in the output verbatim
     assert "[red]x[/red]" in out
     assert "[bold]y[/bold]" in out
+
+
+# ---------------------------------------------------------------------------
+# Item 6: tui.run with new_demos omitted (default=() is falsy)
+# ---------------------------------------------------------------------------
+
+
+def test_demos_default_new_demos_omitted_no_badge():
+    """Calling tui.run without new_demos (default ()) → under construction shown,
+    'New demos' badge NOT shown even when update_available=True (falsy default).
+    """
+    console, buf = _console()
+    seq = iter(["Demos (under construction)", None])
+    # Deliberately omit new_demos to exercise the default parameter
+    tui.run(
+        CARD,
+        console=console,
+        select=lambda *_a, **_k: next(seq),
+        open_url=lambda _u: None,
+        update_available=True,
+    )
+    out = buf.getvalue()
+    assert "under construction" in out.lower()
+    assert "New demos" not in out
