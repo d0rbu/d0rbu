@@ -278,17 +278,45 @@ def parse_card(data: object) -> Card:
     )
 
 
-def new_demos(card: Card, *, current: str) -> list[Demo]:
-    """Demos whose min_version is strictly greater than `current`.
+def new_demos(card: Card, *, current: str, latest: str | None = None) -> list[Demo]:
+    """Demos whose min_version is strictly greater than ``current``.
 
-    ``current`` must be a valid PEP 440 version string; raises ``CardError``
-    otherwise.
+    When ``latest`` is provided, only demos with
+    ``current < min_version <= latest`` are returned (i.e. only those the
+    available update can actually deliver).  When ``latest`` is ``None`` the
+    old unbounded behaviour is preserved: any demo with
+    ``min_version > current`` qualifies.
+
+    ``current`` and ``latest`` (when given) must be valid PEP 440 version
+    strings; raises ``CardError`` otherwise.  A demo whose own
+    ``min_version`` is not a valid PEP 440 string also raises ``CardError``.
     """
     try:
         cur = Version(current)
     except InvalidVersion:
         raise CardError(f"new_demos: invalid current version {current!r}") from None
-    return [d for d in card.demos if Version(d.min_version) > cur]
+
+    if latest is not None:
+        try:
+            upper = Version(latest)
+        except InvalidVersion:
+            raise CardError(f"new_demos: invalid latest version {latest!r}") from None
+
+    result: list[Demo] = []
+    for i, d in enumerate(card.demos):
+        try:
+            dv = Version(d.min_version)
+        except InvalidVersion:
+            raise CardError(
+                f"new_demos: demos[{i}].min_version {d.min_version!r} "
+                "is not a valid version"
+            ) from None
+        if latest is not None:
+            if cur < dv <= upper:
+                result.append(d)
+        elif dv > cur:
+            result.append(d)
+    return result
 
 
 # ---------------------------------------------------------------------------

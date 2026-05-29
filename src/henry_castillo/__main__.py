@@ -186,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
             else None
         )
         new = (
-            content.new_demos(card, current=_update.current_version())
+            content.new_demos(card, current=_update.current_version(), latest=latest)
             if latest is not None
             else []
         )

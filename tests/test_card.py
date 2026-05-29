@@ -836,6 +836,75 @@ def test_new_demos_version_ordering():
 
 
 # ---------------------------------------------------------------------------
+# new_demos with latest= upper bound
+# ---------------------------------------------------------------------------
+
+
+def _card_with_demos(*min_versions: str) -> content.Card:
+    d = copy.deepcopy(_VALID)
+    d["demos"] = [
+        {"name": f"demo_{mv}", "summary": "s", "min_version": mv} for mv in min_versions
+    ]
+    return content.parse_card(d)
+
+
+def test_new_demos_latest_in_range_included():
+    """Demo at 0.5.0 with current=0.0.0, latest=1.0.0 → included."""
+    card = _card_with_demos("0.5.0")
+    result = content.new_demos(card, current="0.0.0", latest="1.0.0")
+    assert [dm.name for dm in result] == ["demo_0.5.0"]
+
+
+def test_new_demos_latest_at_upper_boundary_included():
+    """Demo at 1.0.0 (== latest) with current=0.0.0 → included (boundary inclusive)."""
+    card = _card_with_demos("1.0.0")
+    result = content.new_demos(card, current="0.0.0", latest="1.0.0")
+    assert [dm.name for dm in result] == ["demo_1.0.0"]
+
+
+def test_new_demos_latest_above_upper_excluded():
+    """Demo at 2.0.0 (> latest=1.0.0) → NOT included."""
+    card = _card_with_demos("2.0.0")
+    result = content.new_demos(card, current="0.0.0", latest="1.0.0")
+    assert result == []
+
+
+def test_new_demos_latest_at_current_excluded():
+    """Demo at 0.0.0 (== current) → NOT included regardless of latest."""
+    card = _card_with_demos("0.0.0")
+    result = content.new_demos(card, current="0.0.0", latest="1.0.0")
+    assert result == []
+
+
+def test_new_demos_latest_none_preserves_unbounded_behavior():
+    """latest=None: demo at 999.0.0 IS included (old unbounded behaviour)."""
+    card = _card_with_demos("999.0.0")
+    result = content.new_demos(card, current="0.0.0", latest=None)
+    assert [dm.name for dm in result] == ["demo_999.0.0"]
+
+
+def test_new_demos_bad_min_version_raises_card_error():
+    """A directly-constructed Card with Demo(min_version='garbage') → CardError."""
+    d = copy.deepcopy(_VALID)
+    d["demos"] = []
+    card = content.parse_card(d)
+    # Construct a Demo with a bad min_version directly (bypasses parse_card validation)
+    bad_demo = content.Demo(name="x", summary="s", min_version="not-valid!!")
+    card_with_bad = dataclasses.replace(card, demos=[bad_demo])
+    with pytest.raises(content.CardError, match="min_version"):
+        content.new_demos(card_with_bad, current="0.0.0")
+
+
+def test_new_demos_bad_latest_raises_card_error():
+    """new_demos with a non-PEP-440 latest raises CardError."""
+    d = copy.deepcopy(_VALID)
+    d["demos"] = []
+    card = content.parse_card(d)
+    with pytest.raises(content.CardError, match="invalid latest version"):
+        content.new_demos(card, current="0.0.0", latest="not-a-version")
+
+
+# ---------------------------------------------------------------------------
 # JSON Schema runtime validation (_validate_schema / _parse_bytes)
 # ---------------------------------------------------------------------------
 
