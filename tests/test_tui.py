@@ -26,6 +26,7 @@ _TUI_PROFILE_DOC: dict[str, object] = {
     "links": {
         "github": "https://github.com/d0rbu",
         "blog": "https://s.substack.com",
+        "twitter": "",
     },
 }
 _VALID_DOC: dict[str, object] = {
@@ -126,7 +127,7 @@ def test_blog_unconfigured_does_not_open():
         **_VALID_DOC,
         "profile": {
             **_TUI_PROFILE_DOC,
-            "links": {"github": "https://github.com/d0rbu", "blog": ""},
+            "links": {"github": "https://github.com/d0rbu", "blog": "", "twitter": ""},
         },
     }
     card = parse_card(doc)

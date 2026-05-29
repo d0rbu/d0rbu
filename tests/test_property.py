@@ -60,7 +60,9 @@ _valid_doc = st.fixed_dictionaries(
                 "tagline": _req_str,
                 "about": _req_str,
                 "email": _req_str,
-                "links": st.fixed_dictionaries({"github": _req_str, "blog": _text}),
+                "links": st.fixed_dictionaries(
+                    {"github": _req_str, "blog": _text, "twitter": _text}
+                ),
             }
         ),
         "projects": st.lists(
@@ -126,7 +128,7 @@ def test_parse_valid_doc_yields_clean_card(doc):
     card = content.parse_card(doc)
     assert isinstance(card, Card)
     p = card.profile
-    link_strs = (p.links.github, p.links.blog)
+    link_strs = (p.links.github, p.links.blog, p.links.twitter)
     for s in (p.name, p.handle, p.tagline, p.about, p.email, *link_strs):
         assert not _has_cc(s)
     for proj in card.projects:
@@ -157,7 +159,7 @@ def test_blog_url_invariant(blog):
         tagline="t",
         about="a",
         email="e",
-        links=Links(github="g", blog=blog),
+        links=Links(github="g", blog=blog, twitter=""),
     )
     result = render.blog_url(profile)
     assert result is None or (isinstance(result, str) and result.strip() != "")
@@ -179,6 +181,7 @@ _links_doc = st.fixed_dictionaries(
     {
         "github": _req_str,
         "blog": _text,
+        "twitter": _text,
     }
 )
 

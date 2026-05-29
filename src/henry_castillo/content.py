@@ -45,6 +45,7 @@ class Resume:
 class Links:
     github: str
     blog: str
+    twitter: str
 
 
 @dataclass(frozen=True)
@@ -181,10 +182,11 @@ def _parse_profile(p: object) -> Profile:
     if not isinstance(lk, dict):
         raise CardError("links.github: profile.links missing or not an object")
     ld: dict[str, object] = cast("dict[str, object]", lk)
-    _reject_unknown(ld, {"github", "blog"}, "profile.links")
+    _reject_unknown(ld, {"github", "blog", "twitter"}, "profile.links")
     links = Links(
         github=_req(ld, "links", "github"),
         blog=_opt(ld, "blog", "links.blog"),
+        twitter=_opt(ld, "twitter", "links.twitter"),
     )
     return Profile(
         name=name,

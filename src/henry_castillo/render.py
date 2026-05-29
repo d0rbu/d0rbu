@@ -98,10 +98,18 @@ def resume(card: Card) -> RenderableType:
     return Panel(Group(*parts), title="Résumé", border_style="cyan")
 
 
+def twitter_url(profile: Profile) -> str | None:
+    url = profile.links.twitter.strip()
+    return url or None
+
+
 def contact(profile: Profile) -> RenderableType:
     lines: list[str] = []
     lines.append(f"Email:  {profile.email}")
     lines.append(f"GitHub:  {profile.links.github}")
+    tw = twitter_url(profile)
+    if tw is not None:
+        lines.append(f"Twitter:  {tw}")
     return Panel(Text("\n".join(lines)), title="Contact", border_style="cyan")
 
 

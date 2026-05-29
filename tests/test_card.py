@@ -40,7 +40,7 @@ _VALID: dict[str, object] = {
         "tagline": "Interpretability and safety researcher",
         "about": "DRAFT — about.",
         "email": "henryandrecastillo@gmail.com",
-        "links": {"github": "https://github.com/d0rbu", "blog": ""},
+        "links": {"github": "https://github.com/d0rbu", "blog": "", "twitter": ""},
     },
     "projects": [
         {
@@ -70,7 +70,7 @@ def test_parse_valid():
         tagline="Interpretability and safety researcher",
         about="DRAFT — about.",
         email="henryandrecastillo@gmail.com",
-        links=Links(github="https://github.com/d0rbu", blog=""),
+        links=Links(github="https://github.com/d0rbu", blog="", twitter=""),
     )
     assert c.projects == [
         Project(

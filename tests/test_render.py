@@ -36,6 +36,7 @@ _PROFILE_DOC: dict[str, object] = {
     "links": {
         "github": "https://github.com/d0rbu",
         "blog": "https://x.substack.com",
+        "twitter": "https://x.com/henrycstllo",
     },
 }
 _RESUME_DOC: dict[str, object] = {
@@ -288,7 +289,7 @@ def test_contact_shows_email_and_github():
 
 
 def test_contact_does_not_show_blog():
-    """contact() shows only Email and GitHub — blog is excluded."""
+    """contact() never shows Blog — blog is a separate section."""
     out = _text(render.contact(PROFILE))
     assert "Blog" not in out
     assert "blog" not in out.lower()
@@ -299,6 +300,27 @@ def test_contact_labels_capitalized():
     out = _text(render.contact(PROFILE))
     assert "Email:" in out
     assert "GitHub:" in out
+
+
+def test_contact_shows_twitter_when_set():
+    """When twitter is set, the contact panel includes a Twitter line."""
+    out = _text(render.contact(PROFILE))
+    twitter_lines = [ln.strip("│ \n") for ln in out.splitlines() if "Twitter:" in ln]
+    assert twitter_lines == ["Twitter:  https://x.com/henrycstllo"]
+
+
+def test_contact_omits_twitter_when_empty():
+    """When twitter is '', no Twitter line appears in contact."""
+    doc = {
+        **_VALID_DOC,
+        "profile": {
+            **_PROFILE_DOC,
+            "links": {"github": "https://github.com/d0rbu", "blog": "", "twitter": ""},
+        },
+    }
+    card = parse_card(doc)
+    out = _text(render.contact(card.profile))
+    assert "Twitter:" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +339,7 @@ def test_blog_unconfigured_shows_fallback():
         **_VALID_DOC,
         "profile": {
             **_PROFILE_DOC,
-            "links": {"github": "https://github.com/d0rbu", "blog": ""},
+            "links": {"github": "https://github.com/d0rbu", "blog": "", "twitter": ""},
         },
     }
     card = parse_card(doc)
@@ -339,7 +361,7 @@ def test_blog_url_returns_none_when_empty():
         **_VALID_DOC,
         "profile": {
             **_PROFILE_DOC,
-            "links": {"github": "https://github.com/d0rbu", "blog": ""},
+            "links": {"github": "https://github.com/d0rbu", "blog": "", "twitter": ""},
         },
     }
     card = parse_card(doc)
@@ -353,9 +375,42 @@ def test_blog_url_returns_none_when_whitespace_only():
         tagline="t",
         about="a",
         email="e@x.y",
-        links=Links(github="https://g", blog="   "),
+        links=Links(github="https://g", blog="   ", twitter=""),
     )
     assert render.blog_url(profile) is None
+
+
+# ---------------------------------------------------------------------------
+# twitter_url
+# ---------------------------------------------------------------------------
+
+
+def test_twitter_url_returns_url_when_set():
+    assert render.twitter_url(PROFILE) == "https://x.com/henrycstllo"
+
+
+def test_twitter_url_returns_none_when_empty():
+    profile = Profile(
+        name="N",
+        handle="h",
+        tagline="t",
+        about="a",
+        email="e@x.y",
+        links=Links(github="https://g", blog="", twitter=""),
+    )
+    assert render.twitter_url(profile) is None
+
+
+def test_twitter_url_returns_none_when_whitespace_only():
+    profile = Profile(
+        name="N",
+        handle="h",
+        tagline="t",
+        about="a",
+        email="e@x.y",
+        links=Links(github="https://g", blog="", twitter="   "),
+    )
+    assert render.twitter_url(profile) is None
 
 
 # ---------------------------------------------------------------------------
@@ -417,7 +472,7 @@ def test_content_with_bracket_markup_renders_literally():
         tagline="t",
         about="bio [bold]x[/bold] [link]",
         email="e@x.y",
-        links=Links(github="https://g/[u]", blog=""),
+        links=Links(github="https://g/[u]", blog="", twitter=""),
     )
     assert "[bold]x[/bold] [link]" in _text(render.about(profile))
     contact_text = _text(render.contact(profile))
@@ -452,6 +507,7 @@ _BIDI_VALID_DOC: dict[str, object] = {
         "links": {
             "github": "https://github.com/d0rbu",
             "blog": "https://blog.example.com",
+            "twitter": "",
         },
     },
     "projects": [

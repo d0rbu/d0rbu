@@ -33,6 +33,7 @@ _VALID_CARD_DOC: dict = {
         "links": {
             "github": "https://github.com/d0rbu",
             "blog": "https://henrycastillo.substack.com",
+            "twitter": "https://x.com/henrycstllo",
         },
     },
     "projects": [

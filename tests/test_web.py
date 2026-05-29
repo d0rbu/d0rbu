@@ -19,7 +19,8 @@ def test_card_json_is_schema_valid():
     assert card.profile.tagline == "Interpretability and safety researcher"
     assert card.profile.email == "henryandrecastillo@gmail.com"
     assert card.profile.links.github == "https://github.com/d0rbu"
-    assert card.profile.links.blog == ""
+    assert card.profile.links.blog == "https://substack.com/@d0rb"
+    assert card.profile.links.twitter == "https://x.com/henrycstllo"
     urls = [p.url for p in card.projects]
     assert urls == [
         "https://github.com/d0rbu/mc-dreamer",

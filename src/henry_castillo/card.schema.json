@@ -21,10 +21,11 @@
         "links": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["github", "blog"],
+          "required": ["github", "blog", "twitter"],
           "properties": {
             "github": { "type": "string", "minLength": 1 },
-            "blog": { "type": "string" }
+            "blog": { "type": "string" },
+            "twitter": { "type": "string" }
           }
         }
       }

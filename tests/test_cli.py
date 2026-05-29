@@ -44,6 +44,7 @@ _CLI_PROFILE_DOC: dict[str, object] = {
     "links": {
         "github": "https://github.com/d0rbu",
         "blog": "https://henrycastillo.substack.com",
+        "twitter": "https://x.com/henrycstllo",
     },
 }
 _CLI_RESUME_DOC: dict[str, object] = {
@@ -633,7 +634,11 @@ def test_subcommand_blog_without_url_does_not_open(monkeypatch):
             **_VALID_DOC,
             "profile": {
                 **_CLI_PROFILE_DOC,
-                "links": {"github": "https://github.com/d0rbu", "blog": ""},
+                "links": {
+                    "github": "https://github.com/d0rbu",
+                    "blog": "",
+                    "twitter": "",
+                },
             },
         }
     )
