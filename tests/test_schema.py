@@ -64,9 +64,9 @@ def test_schema_id_and_title():
 
 
 def test_schema_version_const_is_2():
-    """schema_version must be constrained to exactly 2."""
+    """schema_version must be constrained to integer type and exactly 2."""
     schema = content._schema()
-    assert schema["properties"]["schema_version"] == {"const": 2}
+    assert schema["properties"]["schema_version"] == {"type": "integer", "const": 2}
 
 
 @pytest.mark.parametrize(

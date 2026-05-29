@@ -7,7 +7,7 @@
   "required": ["schema_version", "profile", "projects", "resume", "demos"],
   "properties": {
     "$schema": { "type": "string" },
-    "schema_version": { "const": 2 },
+    "schema_version": { "type": "integer", "const": 2 },
     "profile": {
       "type": "object",
       "additionalProperties": false,

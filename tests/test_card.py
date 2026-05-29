@@ -15,6 +15,7 @@ import unicodedata
 import urllib.request as _urllib_request
 from typing import cast
 
+import jsonschema
 import pytest
 
 from henry_castillo import _log, content
@@ -650,6 +651,36 @@ def test_schema_version_1_is_rejected():
     """schema_version==1 is no longer current and must raise CardError."""
     with pytest.raises(CardError):
         content.parse_card({**_VALID, "schema_version": 1})
+
+
+def test_schema_version_float_two_rejected_by_composed_runtime(tmp_path, monkeypatch):
+    """schema_version 2.0 (float) is rejected by parse_card's isinstance(sv, int) guard.
+
+    JSON Schema's "type":"integer" treats 2.0 as an integer (zero fractional part),
+    so the schema layer does NOT reject 2.0.  However, parse_card uses
+    isinstance(sv, int) which returns False for Python float 2.0.  This test pins
+    that the composed runtime (_parse_bytes → _validate_schema + parse_card) rejects
+    2.0, even though the schema layer alone accepts it.
+    """
+    # Empirically confirm the schema layer alone accepts 2.0
+    schema_only_errors = list(
+        jsonschema.Draft202012Validator(content._schema()).iter_errors(
+            {**_VALID, "schema_version": 2.0}
+        )
+    )
+    assert schema_only_errors == [], (
+        "schema layer unexpectedly rejected 2.0 — update this test's assumption"
+    )
+
+    # parse_card (parser layer) must reject 2.0
+    with pytest.raises(CardError, match="schema_version"):
+        content.parse_card({**_VALID, "schema_version": 2.0})
+
+    # _parse_bytes (composed: schema + parser) must also reject 2.0 → CardError
+    monkeypatch.setattr(content, "_cache_path", lambda: tmp_path / "nope.json")
+    raw_float = _json.dumps({**_VALID, "schema_version": 2.0}).encode()
+    with pytest.raises(content.CardError):
+        content.load_card(fetch=lambda _u: raw_float)
 
 
 # ---------------------------------------------------------------------------
