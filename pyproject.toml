@@ -18,8 +18,10 @@ classifiers = [
 ]
 dependencies = [
   "rich>=13",
-  "questionary>=2",
+  "prompt-toolkit==3.0.52",
   "packaging>=23",
+  "loguru==0.7.3",
+  "jsonschema==4.26.0",
 ]
 
 [project.optional-dependencies]
@@ -30,6 +32,7 @@ dev = [
   "ruff>=0.6",
   "ty>=0.0.37",
   "pre-commit>=3.8",
+  "hypothesis==6.152.5",
 ]
 
 [project.urls]
@@ -52,6 +55,7 @@ packages = ["src/henry_castillo"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/henry_castillo/py.typed" = "henry_castillo/py.typed"
+"src/henry_castillo/card.schema.json" = "henry_castillo/card.schema.json"
 
 [tool.ruff]
 line-length = 88
@@ -61,7 +65,7 @@ extend-exclude = ["packages/npm"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "PTH", "RUF", "TID", "PL", "S"]
-ignore = ["PLR0913"]
+ignore = ["PLR0913", "RUF001"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "PLR2004", "S607"]

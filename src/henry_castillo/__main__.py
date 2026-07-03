@@ -1,8 +1,7 @@
-"""CLI entrypoint.
+"""CLI entrypoint: interactive card (TTY) or subcommands, content-driven.
 
-Milestone 1.5 wires version reporting and auto-update. Real interactive
-card + content subcommands arrive in Milestone 2; the default run is still
-an intentional placeholder.
+Update-check behavior (`--version/--check-update/--update/--no-update-check`,
+the throttled TTY-only offline-safe notice) is preserved from Milestone 1.5.
 """
 
 from __future__ import annotations
@@ -10,18 +9,46 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import unicodedata
+import webbrowser
 
-from henry_castillo import __version__
+from rich.console import Console
+from rich.text import Text
+
+from henry_castillo import __version__, _log, content, failure_ui, render, tui
 from henry_castillo import update as _update
 
-_BANNER = "henry-castillo {version}"
-
 _FALSEY_ENV = {"", "0", "false", "no", "off"}
+
+_SEC_ABOUT = "about"
+_SEC_PROJECTS = "projects"
+_SEC_RESUME = "resume"
+_SEC_RESUME_ACCENT = "résumé"
+_SEC_CONTACT = "contact"
+_SEC_BLOG = "blog"
 
 
 def _update_check_disabled_by_env() -> bool:
     val = os.environ.get("HENRY_CASTILLO_NO_UPDATE_CHECK")
     return val is not None and val.strip().lower() not in _FALSEY_ENV
+
+
+def _harden_stream(stream: object) -> None:
+    """Degrade un-encodable characters instead of crashing when the
+    process stdout uses a restrictive codec (e.g.
+    ``PYTHONIOENCODING=ascii`` in CI/Docker). The test harness swaps in a
+    ``StringIO`` (no ``reconfigure``) — silently skipped there."""
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(errors="replace")
+
+
+def _open_url(url: str) -> None:
+    try:
+        webbrowser.open(url)
+    except (webbrowser.Error, OSError) as exc:
+        _log.logger.warning("browser launch failed: {}", exc)
+        print(f"Couldn't open a browser; visit {url}")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -46,33 +73,84 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="skip the background update check on this run",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="enable debug logging to stderr",
+    )
+    sub = parser.add_subparsers(dest="section")
+    sub.add_parser(_SEC_ABOUT, help="show the about section")
+    pp = sub.add_parser(_SEC_PROJECTS, help="list projects")
+    pp.add_argument("--tag", help="filter projects by tag")
+    rp = sub.add_parser(
+        _SEC_RESUME, aliases=[_SEC_RESUME_ACCENT], help="show the résumé"
+    )
+    rp.add_argument(
+        "--open",
+        dest="open_resume",
+        action="store_true",
+        help="open the résumé PDF/web link in a browser",
+    )
+    sub.add_parser(_SEC_CONTACT, help="show contact info")
+    sub.add_parser(_SEC_BLOG, help="show the blog link")
     return parser
 
 
 def _maybe_notice(args: argparse.Namespace) -> None:
-    """Print a one-line update notice, only when interactive and allowed."""
     if args.no_update_check or _update_check_disabled_by_env():
         return
-    if not sys.stdout.isatty():  # never in pipes/CI/tests
+    if not sys.stdout.isatty():
         return
     latest = _update.check_for_update()
     if latest:
         print(_update.update_notice(latest))
 
 
+def _render_section(
+    args: argparse.Namespace, console: Console, card: content.Card
+) -> int:
+    section = args.section
+    if section == _SEC_ABOUT:
+        console.print(render.about(card.profile))
+    elif section == _SEC_PROJECTS:
+        console.print(render.projects(card.projects, tag=getattr(args, "tag", None)))
+    elif section in (_SEC_RESUME, _SEC_RESUME_ACCENT):
+        console.print(render.resume(card))
+        if getattr(args, "open_resume", False):
+            pdf = card.resume.pdf
+            if pdf:
+                _open_url(pdf)
+            else:
+                console.print(
+                    Text(
+                        "No résumé link set.",
+                        style="dim",
+                    )
+                )
+    elif section == _SEC_CONTACT:
+        console.print(render.contact(card.profile))
+    elif section == _SEC_BLOG:
+        console.print(render.blog(card.profile))
+        url = render.blog_url(card.profile)
+        if url is not None:
+            _open_url(url)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
-    """Entry point for all six console aliases."""
     if argv is None:
         argv = sys.argv[1:]
+    _harden_stream(sys.stdout)
+    argv = [unicodedata.normalize("NFC", a) for a in argv]
     args = _build_parser().parse_args(argv)
 
-    if args.version:
-        print(_BANNER.format(version=__version__))
-        return 0
+    _log.configure(debug=_log.debug_enabled(cli_flag=args.debug))
 
+    if args.version:
+        print(f"henry-castillo {__version__}")
+        return 0
     if args.update:
         return _update.perform_update()
-
     if args.check_update:
         latest = _update.check_for_update()
         if latest:
@@ -84,11 +162,43 @@ def main(argv: list[str] | None = None) -> int:
             print(f"henry-castillo {__version__} is up to date.")
         return 0
 
-    print(_BANNER.format(version=__version__))
-    print("Personal website + CLI business card — scaffold.")
-    print("CLI features land in a later release.")
-    print("Repo: https://github.com/d0rbu/d0rbu")
-    _maybe_notice(args)
+    console = Console()
+    try:
+        card = content.load_card()
+    except content.CardError as exc:
+        _log.logger.error("load_card failed: {}", exc)
+        return failure_ui.show_no_data(
+            str(exc),
+            url="https://d0rbu.github.io/d0rbu/",
+            is_tty=sys.stdout.isatty(),
+            console=console,
+        )
+
+    if args.section is not None:
+        rc = _render_section(args, console, card)
+        _maybe_notice(args)
+        return rc
+
+    if sys.stdout.isatty():
+        latest = (
+            _update.check_for_update()
+            if (not args.no_update_check and not _update_check_disabled_by_env())
+            else None
+        )
+        new = (
+            content.new_demos(card, current=_update.current_version(), latest=latest)
+            if latest is not None
+            else []
+        )
+        tui.run(
+            card,
+            console=console,
+            update_available=latest is not None,
+            new_demos=new,
+        )
+    else:
+        render.render_all(console, card)
+        _maybe_notice(args)
     return 0
 
 

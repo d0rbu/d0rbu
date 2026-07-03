@@ -63,6 +63,26 @@ Publisher: PyPI → project → Publishing → add GitHub publisher with
 owner `d0rbu`, repo `d0rbu`, workflow `release.yml`, environment `pypi`.
 Until then, use `workflow_dispatch` with `dry_run=true` to rehearse.
 
+### Content and the gated first release
+
+The CLI is **content-driven from a single hosted `card.json`**, the source of
+which lives at `web/data/card.json` in this repo and is deployed to GitHub
+Pages by `.github/workflows/pages.yml` at
+`https://d0rbu.github.io/d0rbu/data/card.json` (the same artifact the future
+website will consume). Edit `web/data/card.json` and push to `main` — users
+get the update on their next run with **no package release**; the CLI caches
+the last good copy and falls back to it offline. The committed values are a
+GitHub-derived **draft**: replace the `DRAFT —` text in `about`/`resume`, set
+your real `links.blog` (it ships `""` = "not configured"), and confirm
+`projects`. `content/profile.json`/`content/projects.json` and the wheel
+`force-include` are gone — nothing is bundled.
+
+**One-time maintainer setup (like Trusted Publishing):** in the repo
+**Settings → Pages**, set **Source = "GitHub Actions"** so `pages.yml` can
+deploy. The first PyPI release is gated on (a) confirming the hosted
+`card.json` content, (b) enabling GitHub Pages as above, and (c) the one-time
+Trusted Publishing setup described above — then push a `vX.Y.Z` tag.
+
 ### Action pinning policy
 
 **Every** GitHub Action is pinned to a full 40-hex commit SHA with a trailing

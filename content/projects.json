@@ -1,8 +1,0 @@
-[
-  {
-    "name": "SAEBench",
-    "blurb": "sparse autoencoder eval suite",
-    "url": "https://github.com/d0rbu/SAEBench",
-    "tags": ["interp"]
-  }
-]
