@@ -25,10 +25,10 @@ dependencies = [
 [project.optional-dependencies]
 lab = ["torch", "transformers", "textual"]
 dev = [
-  "pytest>=8",
+  "pytest>=9.1.1",
   "pytest-cov>=5",
-  "ruff>=0.6",
-  "ty>=0.0.37",
+  "ruff>=0.15.20",
+  "ty>=0.0.55",
   "pre-commit>=3.8",
 ]
 
