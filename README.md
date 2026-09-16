@@ -14,7 +14,7 @@ website and as a terminal CLI published to PyPI and npm as `henry-castillo`.
 - **Website** — a clean, static personal site (deployed to GitHub Pages).
 - **CLI** — `henry-castillo`: an interactive terminal card (About · Projects ·
   Résumé · Contact · Blog), plus direct subcommands. Built on `rich` +
-  `questionary` for fast startup.
+  `prompt-toolkit` for fast startup.
 - **Shared content** — the CLI and the (future) site both consume a single
   hosted `card.json` at `https://d0rbu.github.io/d0rbu/data/card.json`, sourced
   from `web/data/card.json` in this repo. Edit that file and push to `main` —
